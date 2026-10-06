@@ -3,7 +3,6 @@ const path = require('path');
 
 const db = new Database(path.join(__dirname, 'dawam.db'));
 
-// Bikin tabel kalau belum ada
 db.exec(`
   CREATE TABLE IF NOT EXISTS ayat (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -13,22 +12,77 @@ db.exec(`
   )
 `);
 
-// Fungsi: ambil 1 row random dari tabel ayat
-function getRandomAyat() {
-  const row = db.prepare('SELECT * FROM ayat ORDER BY RANDOM() LIMIT 1').get();
-  return row;
-}
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    jid TEXT PRIMARY KEY,
+    last_sent_id INTEGER DEFAULT 0,
+    state TEXT DEFAULT 'IDLE'
+  )
+`);
 
-// Fungsi: insert data ayat baru (dipakai buat seeding)
+// ========== AYAT ==========
+
 function insertAyat(juz, halaman, imagePath) {
   const stmt = db.prepare('INSERT INTO ayat (juz, halaman, image_path) VALUES (?, ?, ?)');
   return stmt.run(juz, halaman, imagePath);
 }
 
-// Fungsi: cek berapa banyak data yang ada
 function countAyat() {
   const row = db.prepare('SELECT COUNT(*) as total FROM ayat').get();
   return row.total;
 }
 
-module.exports = { db, getRandomAyat, insertAyat, countAyat };
+// Ambil ayat berikutnya buat user tertentu (sequential berdasarkan progress dia)
+function getNextAyatForUser(jid) {
+  const user = getOrCreateUser(jid);
+  let row = db
+    .prepare('SELECT * FROM ayat WHERE id > ? ORDER BY id ASC LIMIT 1')
+    .get(user.last_sent_id);
+
+  // Kalau udah habis (sampai akhir), balik lagi ke id 1 (looping dari awal)
+  if (!row) {
+    row = db.prepare('SELECT * FROM ayat ORDER BY id ASC LIMIT 1').get();
+  }
+  return row;
+}
+
+// ========== USERS ==========
+
+function getOrCreateUser(jid) {
+  let user = db.prepare('SELECT * FROM users WHERE jid = ?').get(jid);
+  if (!user) {
+    db.prepare('INSERT INTO users (jid, last_sent_id, state) VALUES (?, 0, ?)').run(jid, 'IDLE');
+    user = db.prepare('SELECT * FROM users WHERE jid = ?').get(jid);
+  }
+  return user;
+}
+
+function setUserState(jid, state) {
+  getOrCreateUser(jid);
+  db.prepare('UPDATE users SET state = ? WHERE jid = ?').run(state, jid);
+}
+
+function getUserState(jid) {
+  const user = getOrCreateUser(jid);
+  return user.state;
+}
+
+function updateLastSentId(jid, newId) {
+  db.prepare('UPDATE users SET last_sent_id = ? WHERE jid = ?').run(newId, jid);
+}
+
+function getAllUsers() {
+  return db.prepare('SELECT * FROM users').all();
+}
+
+module.exports = {
+  db,
+  insertAyat,
+  countAyat,
+  getNextAyatForUser,
+  getOrCreateUser,
+  setUserState,
+  getUserState,
+  updateLastSentId,
+  getAllUsers,
+};
