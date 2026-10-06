@@ -15,6 +15,9 @@ const {
   getOrCreateUser,
   isUserRegistered,
   registerUser,
+  setUserName,
+  setUserLocation,
+  getUserName,
 } = require('./db');
 
 // ========== KONFIGURASI ==========
@@ -49,8 +52,8 @@ const PESAN_REMINDER_SHOLAT = {
   isya: 'Assalamu\'alaikum 🌃\nWaktu Isya telah tiba. Tutup hari ini dengan shalat dan doa terbaik.',
 };
 
-const PESAN_TAWARAN_NGAJI =
-  'Semoga shalatnya diterima Allah ﷻ 🤲\n\nSahabat Dawam, sudah siap lanjut tilawah hari ini? Yuk sisihkan sedikit waktu untuk membaca Al-Qur\'an 📖\n\nBalas *"ya"* untuk lanjut membaca, atau *"nanti"* kalau belum sempat.';
+const PESAN_TAWARAN_NGAJI_TEMPLATE = (nama) =>
+  `Semoga shalatnya diterima Allah ﷻ 🤲\n\n${nama}, sudah siap lanjut tilawah hari ini? Yuk sisihkan sedikit waktu untuk membaca Al-Qur'an 📖\n\nBalas *"ya"* untuk lanjut membaca, atau *"nanti"* kalau belum sempat.`;
 
 const PESAN_SETELAH_YA_TEMPLATE = (juz, halaman) =>
   `Barakallahu fiik, semoga menjadi pemberat timbangan kebaikan 🤍\n\nIni bacaan untukmu (Juz ${juz}, halaman ${halaman}):`;
@@ -63,6 +66,18 @@ const PESAN_TIDAK_DIMENGERTI =
 
 const PESAN_SELAMAT_DATANG =
   'Assalamu\'alaikum warahmatullahi wabarakatuh 🌙\n\nSelamat datang di *Dawam* — teman harianmu untuk istiqomah shalat dan tilawah Al-Qur\'an.\n\nMulai sekarang, Dawam akan mengingatkanmu di setiap waktu shalat dan menemanimu tilawah sedikit demi sedikit, tanpa beban.\n\n"Sebaik-baik amalan di sisi Allah adalah yang dikerjakan secara terus-menerus (dawam), walaupun sedikit." (HR. Bukhari & Muslim)\n\nBarakallahu fiik, Sahabat Dawam 🤍';
+
+const PESAN_TANYA_NAMA =
+  'Sebelum lanjut, kenalan dulu yuk 😊\nBoleh kasih tahu Dawam, siapa nama panggilanmu?';
+
+const PESAN_TANYA_LOKASI_TEMPLATE = (nama) =>
+  `Senang berkenalan denganmu, ${nama} 🤍\n\nSatu lagi, kamu domisili di kota/daerah mana? Ini supaya Dawam bisa sesuaikan jadwal shalatnya nanti.`;
+
+const PESAN_ONBOARDING_SELESAI_TEMPLATE = (nama, lokasi) =>
+  `Siap, ${nama}! Dawam sudah catat domisilimu di ${lokasi} 📍`;
+
+const PESAN_PERKENALAN_PERAN =
+  'Sedikit cerita soal Dawam ya 🤍\n\nSetiap hari, aku bakal ingetin kamu pas waktu shalat tiba — nggak lama-lama, cuma pengingat sederhana biar nggak kelewat.\n\nSelepas itu, aku juga bakal nanya apakah kamu mau lanjut tilawah sedikit. Nggak ada paksaan — kalau lagi sibuk atau belum sempat, bilang aja "nanti", aku nggak akan maksa 😊\n\nKalau kamu bilang mau, aku kirimin bacaan lanjutannya, dari halaman terakhir yang udah kamu baca. Pelan-pelan aja, yang penting konsisten.\n\nYuk kita mulai perjalanan ini bareng-bareng, semoga Allah mudahkan 🌙';
 
 const KEYWORD_AKTIVASI = 'dawam';
 
@@ -154,9 +169,10 @@ async function handleIncomingMessage(jid, text) {
   if (!isUserRegistered(jid)) {
     if (text === KEYWORD_AKTIVASI) {
       registerUser(jid);
-      setUserState(jid, 'IDLE');
+      setUserState(jid, 'WAITING_NAME');
       await sock.sendMessage(jid, { text: PESAN_SELAMAT_DATANG });
-      console.log(`✅ User baru teraktivasi: ${jid}`);
+      await sock.sendMessage(jid, { text: PESAN_TANYA_NAMA });
+      console.log(`✅ User baru teraktivasi: ${jid}, menunggu nama...`);
     } else {
       console.log(`(User belum terdaftar, bukan keyword aktivasi, diabaikan: "${text}")`);
     }
@@ -165,7 +181,33 @@ async function handleIncomingMessage(jid, text) {
 
   const state = getUserState(jid);
 
-  if (state === 'WAITING_CONFIRM') {
+  if (state === 'WAITING_NAME') {
+    // Pakai teks asli (sebelum di-lowercase) biar nama ke-capture rapi.
+    // text di sini udah lowercase dari caller, jadi kita capitalize kata pertama tiap kata.
+    const namaRapi = text
+      .split(' ')
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+
+    setUserName(jid, namaRapi);
+    setUserState(jid, 'WAITING_LOCATION');
+    await sock.sendMessage(jid, { text: PESAN_TANYA_LOKASI_TEMPLATE(namaRapi) });
+    console.log(`✅ Nama tersimpan untuk ${jid}: ${namaRapi}, menunggu lokasi...`);
+  } else if (state === 'WAITING_LOCATION') {
+    const lokasiRapi = text
+      .split(' ')
+      .filter(Boolean)
+      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+
+    setUserLocation(jid, lokasiRapi);
+    setUserState(jid, 'IDLE');
+    const nama = getUserName(jid) || 'Sahabat Dawam';
+    await sock.sendMessage(jid, { text: PESAN_ONBOARDING_SELESAI_TEMPLATE(nama, lokasiRapi) });
+    await sock.sendMessage(jid, { text: PESAN_PERKENALAN_PERAN });
+    console.log(`✅ Lokasi tersimpan untuk ${jid}: ${lokasiRapi}. Onboarding selesai.`);
+  } else if (state === 'WAITING_CONFIRM') {
     const jawabanYa = ['ya', 'iya', 'mau', 'yes', 'y', 'boleh', 'siap'];
     const jawabanTidak = ['nanti', 'tidak', 'ga', 'gak', 'engga', 'enggak', 'no', 'belum'];
 
@@ -204,7 +246,8 @@ async function kirimReminderSholat(waktuSholat, jid) {
 }
 
 async function kirimTawaranNgaji(jid) {
-  await sock.sendMessage(jid, { text: PESAN_TAWARAN_NGAJI });
+  const nama = getUserName(jid) || 'Sahabat Dawam';
+  await sock.sendMessage(jid, { text: PESAN_TAWARAN_NGAJI_TEMPLATE(nama) });
   setUserState(jid, 'WAITING_CONFIRM');
   console.log(`✅ Tawaran ngaji terkirim ke ${jid}, menunggu balasan...`);
 }

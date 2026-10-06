@@ -17,7 +17,9 @@ db.exec(`
     jid TEXT PRIMARY KEY,
     last_sent_id INTEGER DEFAULT 0,
     state TEXT DEFAULT 'IDLE',
-    is_registered INTEGER DEFAULT 0
+    is_registered INTEGER DEFAULT 0,
+    name TEXT,
+    location TEXT
   )
 `);
 
@@ -70,6 +72,21 @@ function registerUser(jid) {
   db.prepare('UPDATE users SET is_registered = 1 WHERE jid = ?').run(jid);
 }
 
+function setUserName(jid, name) {
+  getOrCreateUser(jid);
+  db.prepare('UPDATE users SET name = ? WHERE jid = ?').run(name, jid);
+}
+
+function setUserLocation(jid, location) {
+  getOrCreateUser(jid);
+  db.prepare('UPDATE users SET location = ? WHERE jid = ?').run(location, jid);
+}
+
+function getUserName(jid) {
+  const user = getOrCreateUser(jid);
+  return user.name;
+}
+
 function setUserState(jid, state) {
   getOrCreateUser(jid);
   db.prepare('UPDATE users SET state = ? WHERE jid = ?').run(state, jid);
@@ -100,4 +117,7 @@ module.exports = {
   getAllUsers,
   isUserRegistered,
   registerUser,
+  setUserName,
+  setUserLocation,
+  getUserName,
 };
