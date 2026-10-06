@@ -16,7 +16,8 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     jid TEXT PRIMARY KEY,
     last_sent_id INTEGER DEFAULT 0,
-    state TEXT DEFAULT 'IDLE'
+    state TEXT DEFAULT 'IDLE',
+    is_registered INTEGER DEFAULT 0
   )
 `);
 
@@ -51,10 +52,22 @@ function getNextAyatForUser(jid) {
 function getOrCreateUser(jid) {
   let user = db.prepare('SELECT * FROM users WHERE jid = ?').get(jid);
   if (!user) {
-    db.prepare('INSERT INTO users (jid, last_sent_id, state) VALUES (?, 0, ?)').run(jid, 'IDLE');
+    db.prepare(
+      'INSERT INTO users (jid, last_sent_id, state, is_registered) VALUES (?, 0, ?, 0)'
+    ).run(jid, 'IDLE');
     user = db.prepare('SELECT * FROM users WHERE jid = ?').get(jid);
   }
   return user;
+}
+
+function isUserRegistered(jid) {
+  const user = getOrCreateUser(jid);
+  return user.is_registered === 1;
+}
+
+function registerUser(jid) {
+  getOrCreateUser(jid);
+  db.prepare('UPDATE users SET is_registered = 1 WHERE jid = ?').run(jid);
 }
 
 function setUserState(jid, state) {
@@ -85,4 +98,6 @@ module.exports = {
   getUserState,
   updateLastSentId,
   getAllUsers,
+  isUserRegistered,
+  registerUser,
 };

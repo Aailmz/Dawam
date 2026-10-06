@@ -4,6 +4,7 @@ const {
   DisconnectReason,
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
+const cron = require('node-cron');
 const path = require('path');
 const {
   getNextAyatForUser,
@@ -12,17 +13,32 @@ const {
   updateLastSentId,
   getAllUsers,
   getOrCreateUser,
+  isUserRegistered,
+  registerUser,
 } = require('./db');
 
 // ========== KONFIGURASI ==========
 
-// Daftar nomor yang mau dikirimin reminder (format: 62xxx@s.whatsapp.net)
-// Prototype: hardcode dulu, nanti bisa diganti ambil dari tabel users otomatis
-const TARGET_NUMBERS = [
-  '628123456789@s.whatsapp.net', // <-- ganti ini dengan nomor kamu
-];
-
 const JEDA_TAWARAN_MS = 1 * 60 * 1000; // 1 menit (prototype)
+
+// Jadwal waktu sholat (hardcode, format 24 jam)
+// Format cron: 'menit jam * * *'
+const JADWAL_SHOLAT = {
+  subuh: { jam: 4, menit: 20 },
+  dzuhur: { jam: 11, menit: 44 },
+  ashar: { jam: 14, menit: 47 },
+  maghrib: { jam: 17, menit: 49 },
+  isya: { jam: 18, menit: 55 },
+};
+
+// Ambil semua user yang SUDAH aktivasi (chat "dawam") dari database.
+// Dipanggil tiap kali mau broadcast reminder, jadi otomatis update
+// kalau ada user baru yang aktivasi.
+function getRegisteredTargets() {
+  return getAllUsers()
+    .filter((u) => u.is_registered === 1)
+    .map((u) => u.jid);
+}
 
 // Pesan-pesan islami
 const PESAN_REMINDER_SHOLAT = {
@@ -44,6 +60,11 @@ const PESAN_SETELAH_TIDAK =
 
 const PESAN_TIDAK_DIMENGERTI =
   'Maaf, Dawam belum paham maksudnya 🙏 Balas dengan *"ya"* atau *"nanti"* ya, Sahabat.';
+
+const PESAN_SELAMAT_DATANG =
+  'Assalamu\'alaikum warahmatullahi wabarakatuh 🌙\n\nSelamat datang di *Dawam* — teman harianmu untuk istiqomah shalat dan tilawah Al-Qur\'an.\n\nMulai sekarang, Dawam akan mengingatkanmu di setiap waktu shalat dan menemanimu tilawah sedikit demi sedikit, tanpa beban.\n\n"Sebaik-baik amalan di sisi Allah adalah yang dikerjakan secara terus-menerus (dawam), walaupun sedikit." (HR. Bukhari & Muslim)\n\nBarakallahu fiik, Sahabat Dawam 🤍';
+
+const KEYWORD_AKTIVASI = 'dawam';
 
 // ========== BOT LOGIC ==========
 
@@ -74,6 +95,7 @@ async function startBot() {
       if (shouldReconnect) startBot();
     } else if (connection === 'open') {
       console.log('\n✅ Berhasil terkoneksi ke WhatsApp!\n');
+      setupScheduler();
       printHelp();
     }
   });
@@ -82,7 +104,10 @@ async function startBot() {
     const message = m.messages[0];
     if (!message.message || message.key.fromMe) return;
 
-    const sender = message.key.remoteJid;
+    // Baileys versi baru kadang ngirim remoteJid sebagai @lid (linked id/privacy id)
+    // bukan JID asli @s.whatsapp.net. Kita normalisasi: kalau ada remoteJidAlt
+    // atau participant yang formatnya @s.whatsapp.net, pakai itu sebagai identitas utama.
+    const sender = normalizeJid(message);
     const text = (
       message.message.conversation ||
       message.message.extendedTextMessage?.text ||
@@ -99,9 +124,45 @@ async function startBot() {
   return sock;
 }
 
+// ========== NORMALISASI JID ==========
+
+// WhatsApp sekarang kadang pakai @lid (privacy-preserving linked ID) sebagai remoteJid,
+// bukan nomor asli @s.whatsapp.net. Fungsi ini coba ambil JID "asli" kalau tersedia,
+// supaya state/progress yang disimpan pas kirim reminder (pakai @s.whatsapp.net)
+// nyambung sama pesan balasan yang masuk (yang mungkin keformat @lid).
+function normalizeJid(message) {
+  const remoteJid = message.key.remoteJid;
+
+  // Baileys versi baru biasanya nyediain field senderPn / remoteJidAlt kalau
+  // remoteJid-nya berupa @lid, berisi nomor asli dalam format @s.whatsapp.net
+  const altJid =
+    message.key.senderPn || // beberapa versi pakai field ini
+    message.key.remoteJidAlt ||
+    null;
+
+  if (remoteJid && remoteJid.endsWith('@lid') && altJid) {
+    return altJid;
+  }
+
+  return remoteJid;
+}
+
 // ========== HANDLER PESAN MASUK ==========
 
 async function handleIncomingMessage(jid, text) {
+  // Cek dulu: apakah user belum terdaftar dan ngirim keyword aktivasi?
+  if (!isUserRegistered(jid)) {
+    if (text === KEYWORD_AKTIVASI) {
+      registerUser(jid);
+      setUserState(jid, 'IDLE');
+      await sock.sendMessage(jid, { text: PESAN_SELAMAT_DATANG });
+      console.log(`✅ User baru teraktivasi: ${jid}`);
+    } else {
+      console.log(`(User belum terdaftar, bukan keyword aktivasi, diabaikan: "${text}")`);
+    }
+    return; // user belum terdaftar, flow lain (konfirmasi ngaji dll) belum berlaku
+  }
+
   const state = getUserState(jid);
 
   if (state === 'WAITING_CONFIRM') {
@@ -170,15 +231,39 @@ async function kirimBacaan(jid) {
   }
 }
 
+// ========== SCHEDULER OTOMATIS ==========
+
+function setupScheduler() {
+  for (const [namaWaktu, jadwal] of Object.entries(JADWAL_SHOLAT)) {
+    const cronExpr = `${jadwal.menit} ${jadwal.jam} * * *`; // tiap hari, jam:menit tertentu
+
+    cron.schedule(cronExpr, async () => {
+      console.log(`\n⏰ Waktu ${namaWaktu} tiba (${jadwal.jam}:${String(jadwal.menit).padStart(2, '0')}). Mengirim reminder otomatis...`);
+      const targets = getRegisteredTargets();
+      if (targets.length === 0) {
+        console.log('⚠️  Belum ada user yang teraktivasi, reminder dilewati.');
+        return;
+      }
+      for (const jid of targets) {
+        await kirimReminderSholat(namaWaktu, jid);
+      }
+    });
+
+    console.log(`🕒 Scheduler ${namaWaktu} diset jam ${jadwal.jam}:${String(jadwal.menit).padStart(2, '0')}`);
+  }
+}
+
 // ========== COMMAND MANUAL VIA TERMINAL ==========
 
 function printHelp() {
-  console.log('Bot siap. Command yang bisa dipakai di terminal ini:');
-  console.log('  subuh   -> trigger reminder Subuh ke semua target');
-  console.log('  dzuhur  -> trigger reminder Dzuhur ke semua target');
-  console.log('  ashar   -> trigger reminder Ashar ke semua target');
-  console.log('  maghrib -> trigger reminder Maghrib ke semua target');
-  console.log('  isya    -> trigger reminder Isya ke semua target');
+  console.log('Bot siap.');
+  console.log(`Catatan: user harus chat "${KEYWORD_AKTIVASI}" dulu dari WhatsApp-nya supaya teraktivasi.\n`);
+  console.log('Command yang bisa dipakai di terminal ini:');
+  console.log('  subuh   -> trigger reminder Subuh ke semua user yang sudah aktivasi');
+  console.log('  dzuhur  -> trigger reminder Dzuhur ke semua user yang sudah aktivasi');
+  console.log('  ashar   -> trigger reminder Ashar ke semua user yang sudah aktivasi');
+  console.log('  maghrib -> trigger reminder Maghrib ke semua user yang sudah aktivasi');
+  console.log('  isya    -> trigger reminder Isya ke semua user yang sudah aktivasi');
   console.log('  help    -> tampilkan daftar command ini lagi\n');
 }
 
@@ -191,7 +276,12 @@ process.stdin.on('data', async (data) => {
       console.log('Bot belum siap, tunggu koneksi dulu.');
       return;
     }
-    for (const jid of TARGET_NUMBERS) {
+    const targets = getRegisteredTargets();
+    if (targets.length === 0) {
+      console.log('⚠️  Belum ada user yang teraktivasi (chat "dawam" dulu dari WhatsApp).');
+      return;
+    }
+    for (const jid of targets) {
       await kirimReminderSholat(input, jid);
     }
   } else if (input === 'help') {
