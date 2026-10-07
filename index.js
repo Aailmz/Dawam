@@ -276,7 +276,15 @@ async function kirimBacaan(jid) {
 
 // ========== SCHEDULER OTOMATIS ==========
 
+let schedulerSudahDiset = false;
+
 function setupScheduler() {
+  if (schedulerSudahDiset) {
+    console.log('(Scheduler sudah pernah diset sebelumnya, dilewati biar ga dobel)');
+    return;
+  }
+  schedulerSudahDiset = true;
+
   for (const [namaWaktu, jadwal] of Object.entries(JADWAL_SHOLAT)) {
     const cronExpr = `${jadwal.menit} ${jadwal.jam} * * *`; // tiap hari, jam:menit tertentu
 
