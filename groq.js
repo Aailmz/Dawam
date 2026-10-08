@@ -97,18 +97,44 @@ Klasifikasikan jawaban ini ke SALAH SATU dari tiga kategori berikut:
 
 Balas HANYA dengan satu kata: YA, TIDAK, atau TIDAK_JELAS. Tanpa penjelasan tambahan.`;
 
-  const hasil = await callGroqText(prompt, 10); // max_tokens kecil, cuma butuh 1 kata
+  // max_tokens dinaikkan: model reasoning (gpt-oss) kadang butuh "mikir" dulu
+  // (reasoning tokens) sebelum keluarin jawaban final, jadi 10 token kemarin
+  // kepotong sebelum sempat jawab. Kita juga minta reasoning_effort rendah
+  // biar lebih cepat & hemat token buat task sesimpel ini.
+  const hasil = await callGroqText(prompt, 100, { reasoning_effort: 'low' });
+
+  if (!hasil) {
+    console.log('⚠️  Groq gagal/kosong saat parsing intent, fallback ke keyword matching manual.');
+    return fallbackKeywordIntent(pesanUser);
+  }
+
   const cleaned = hasil.trim().toUpperCase();
 
   if (cleaned.includes('TIDAK_JELAS')) return 'TIDAK_JELAS';
   if (cleaned.includes('TIDAK')) return 'TIDAK';
   if (cleaned.includes('YA')) return 'YA';
-  return 'TIDAK_JELAS'; // fallback aman kalau parsing gagal
+
+  // Kalau Groq balas sesuatu yang ga mengandung kata kunci sama sekali,
+  // jangan langsung nyerah ke TIDAK_JELAS -> coba fallback keyword dulu.
+  console.log(`⚠️  Groq balas di luar format yang diharapkan: "${hasil}", pakai fallback keyword.`);
+  return fallbackKeywordIntent(pesanUser);
+}
+
+// Fallback sederhana berbasis keyword, dipakai kalau Groq gagal/ga jelas.
+// Ini jaring pengaman terakhir biar flow tetap jalan walau AI bermasalah.
+function fallbackKeywordIntent(pesanUser) {
+  const text = pesanUser.trim().toLowerCase();
+  const jawabanYa = ['ya', 'iya', 'mau', 'yes', 'y', 'boleh', 'siap', 'gas', 'oke', 'ok'];
+  const jawabanTidak = ['nanti', 'tidak', 'ga', 'gak', 'engga', 'enggak', 'no', 'belum'];
+
+  if (jawabanYa.includes(text)) return 'YA';
+  if (jawabanTidak.includes(text)) return 'TIDAK';
+  return 'TIDAK_JELAS';
 }
 
 // ========== HELPER: PANGGIL GROQ ==========
 
-async function callGroqText(userPrompt, maxTokens = 200) {
+async function callGroqText(userPrompt, maxTokens = 200, extraOptions = {}) {
   try {
     const completion = await groq.chat.completions.create({
       model: MODEL,
@@ -118,9 +144,15 @@ async function callGroqText(userPrompt, maxTokens = 200) {
       ],
       max_tokens: maxTokens,
       temperature: 0.8, // sedikit tinggi biar variatif tiap kali generate
+      ...extraOptions, // misal reasoning_effort: 'low' buat task simpel kayak classification
     });
 
-    return completion.choices[0]?.message?.content?.trim() || '';
+    const result = completion.choices[0]?.message?.content?.trim();
+    if (!result) {
+      console.log('⚠️  Groq balas kosong (kemungkinan token habis sebelum jawaban final).');
+      return null;
+    }
+    return result;
   } catch (err) {
     console.error('❌ Groq API error:', err.message);
     return null; // caller perlu handle null (pakai fallback template biasa)
