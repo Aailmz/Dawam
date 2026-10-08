@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -19,6 +21,7 @@ const {
   setUserLocation,
   getUserName,
 } = require('./db');
+const groqAI = require('./groq');
 
 // ========== KONFIGURASI ==========
 
@@ -208,36 +211,64 @@ async function handleIncomingMessage(jid, text) {
     await sock.sendMessage(jid, { text: PESAN_PERKENALAN_PERAN });
     console.log(`✅ Lokasi tersimpan untuk ${jid}: ${lokasiRapi}. Onboarding selesai.`);
   } else if (state === 'WAITING_CONFIRM') {
-    const jawabanYa = ['ya', 'iya', 'mau', 'yes', 'y', 'boleh', 'siap'];
-    const jawabanTidak = ['nanti', 'tidak', 'ga', 'gak', 'engga', 'enggak', 'no', 'belum'];
+    const nama = getUserName(jid) || 'Sahabat Dawam';
 
-    if (jawabanYa.includes(text)) {
+    // Dulu: pencocokan keyword persis. Sekarang: parsing intent via Groq,
+    // supaya jawaban bebas ("boleh deh", "nanti aja ya", dll) tetap kebaca.
+    const intent = await groqAI.parseIntentJawaban(text);
+    console.log(`(Intent terbaca: ${intent})`);
+
+    if (intent === 'YA') {
+      const responYa = await groqAI.generateResponYa(nama);
+      if (responYa) await sock.sendMessage(jid, { text: responYa });
+
       await kirimBacaan(jid);
       setUserState(jid, 'IDLE');
-    } else if (jawabanTidak.includes(text)) {
-      await sock.sendMessage(jid, { text: PESAN_SETELAH_TIDAK });
+    } else if (intent === 'TIDAK') {
+      let pesan = await groqAI.generateResponTidak(nama);
+      if (!pesan) pesan = PESAN_SETELAH_TIDAK;
+
+      await sock.sendMessage(jid, { text: pesan });
       setUserState(jid, 'IDLE');
     } else {
-      // Ga ngerti jawaban user, tetap hidupin percakapan
-      await sock.sendMessage(jid, { text: PESAN_TIDAK_DIMENGERTI });
-      // state tetap WAITING_CONFIRM, biar user bisa coba jawab lagi
+      // TIDAK_JELAS -> tetap hidupin percakapan, state tetap WAITING_CONFIRM
+      let pesan = await groqAI.generateFallbackChat(nama, text);
+      if (!pesan) pesan = PESAN_TIDAK_DIMENGERTI;
+
+      await sock.sendMessage(jid, { text: pesan });
     }
   } else {
-    // Di luar state nunggu konfirmasi, bisa ditambah respon default lain di sini nanti
-    console.log(`(Pesan di luar flow aktif, diabaikan untuk sekarang)`);
+    // Pesan di luar flow aktif (state IDLE dll) -> tetap dibales natural via Groq,
+    // biar percakapan kerasa hidup, bukan diabaikan begitu saja.
+    const nama = getUserName(jid) || 'Sahabat Dawam';
+    console.log(`(Pesan di luar flow aktif, dibales via Groq fallback)`);
+    const pesan = await groqAI.generateFallbackChat(nama, text);
+    if (pesan) {
+      await sock.sendMessage(jid, { text: pesan });
+    } else {
+      console.log('(Groq gagal, tidak ada fallback template, pesan diabaikan)');
+    }
   }
 }
 
 // ========== FUNGSI-FUNGSI TRIGGER ==========
 
 async function kirimReminderSholat(waktuSholat, jid) {
-  const pesan = PESAN_REMINDER_SHOLAT[waktuSholat];
-  if (!pesan) {
+  if (!PESAN_REMINDER_SHOLAT[waktuSholat]) {
     console.log(`⚠️  Waktu sholat "${waktuSholat}" tidak dikenali.`);
     return;
   }
 
   getOrCreateUser(jid);
+  const nama = getUserName(jid) || 'Sahabat Dawam';
+
+  // Coba generate pesan dinamis via Groq, fallback ke template statis kalau gagal
+  let pesan = await groqAI.generateReminderSholat(waktuSholat, nama);
+  if (!pesan) {
+    console.log('⚠️  Groq gagal/kosong, pakai template statis sebagai fallback.');
+    pesan = PESAN_REMINDER_SHOLAT[waktuSholat];
+  }
+
   await sock.sendMessage(jid, { text: pesan });
   console.log(`✅ Reminder ${waktuSholat} terkirim ke ${jid}`);
 
@@ -247,7 +278,14 @@ async function kirimReminderSholat(waktuSholat, jid) {
 
 async function kirimTawaranNgaji(jid) {
   const nama = getUserName(jid) || 'Sahabat Dawam';
-  await sock.sendMessage(jid, { text: PESAN_TAWARAN_NGAJI_TEMPLATE(nama) });
+
+  let pesan = await groqAI.generateTawaranNgaji(nama);
+  if (!pesan) {
+    console.log('⚠️  Groq gagal/kosong, pakai template statis sebagai fallback.');
+    pesan = PESAN_TAWARAN_NGAJI_TEMPLATE(nama);
+  }
+
+  await sock.sendMessage(jid, { text: pesan });
   setUserState(jid, 'WAITING_CONFIRM');
   console.log(`✅ Tawaran ngaji terkirim ke ${jid}, menunggu balasan...`);
 }
