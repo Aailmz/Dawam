@@ -9,10 +9,9 @@ const qrcode = require('qrcode-terminal');
 const cron = require('node-cron');
 const path = require('path');
 const {
-  getNextAyatForUser,
+  getUser,
   setUserState,
   getUserState,
-  updateLastSentId,
   getAllUsers,
   getOrCreateUser,
   isUserRegistered,
@@ -20,15 +19,28 @@ const {
   setUserName,
   setUserLocation,
   getUserName,
+  // phase 2
+  getBacaanById,
+  cariBacaanBySuratLike,
+  setUserGender,
+  setUserTarget,
+  setUserMotivasi,
+  setUserMulaiSurat,
+  updateLastSentBacaanId,
+  setTanggalMulaiBaca,
+  incrementNoResponse,
+  resetNoResponse,
+  setModeArabSaja,
+  setWaktuTawaranTerakhir,
 } = require('./db');
 const groqAI = require('./groq');
 
 // ========== KONFIGURASI ==========
 
 const JEDA_TAWARAN_MS = 1 * 60 * 1000; // 1 menit (prototype)
+const AMBANG_SILENT_JAM = 6; // silent user dianggap no-response setelah 6 jam (§7.3)
+const INTERVAL_CRON_SILENT = '0 */3 * * *'; // tiap 3 jam
 
-// Jadwal waktu sholat (hardcode, format 24 jam)
-// Format cron: 'menit jam * * *'
 const JADWAL_SHOLAT = {
   subuh: { jam: 4, menit: 20 },
   dzuhur: { jam: 11, menit: 44 },
@@ -37,16 +49,14 @@ const JADWAL_SHOLAT = {
   isya: { jam: 18, menit: 55 },
 };
 
-// Ambil semua user yang SUDAH aktivasi (chat "dawam") dari database.
-// Dipanggil tiap kali mau broadcast reminder, jadi otomatis update
-// kalau ada user baru yang aktivasi.
 function getRegisteredTargets() {
   return getAllUsers()
     .filter((u) => u.is_registered === 1)
     .map((u) => u.jid);
 }
 
-// Pesan-pesan islami
+// ========== PESAN STATIS (fallback kalau Groq gagal) ==========
+
 const PESAN_REMINDER_SHOLAT = {
   subuh: 'Assalamu\'alaikum 🌙\nWaktu Subuh telah tiba. Yuk, mulai hari dengan sujud pertama kita kepada Allah ﷻ.\n\n"Dan dirikanlah shalat, sesungguhnya shalat itu mencegah dari (perbuatan-perbuatan) keji dan mungkar." (QS. Al-Ankabut: 45)',
   dzuhur: 'Assalamu\'alaikum ☀️\nWaktu Dzuhur telah tiba. Mari sejenak rehat dari aktivitas untuk menghadap Allah ﷻ.',
@@ -58,8 +68,14 @@ const PESAN_REMINDER_SHOLAT = {
 const PESAN_TAWARAN_NGAJI_TEMPLATE = (nama) =>
   `Semoga shalatnya diterima Allah ﷻ 🤲\n\n${nama}, sudah siap lanjut tilawah hari ini? Yuk sisihkan sedikit waktu untuk membaca Al-Qur'an 📖\n\nBalas *"ya"* untuk lanjut membaca, atau *"nanti"* kalau belum sempat.`;
 
-const PESAN_SETELAH_YA_TEMPLATE = (juz, halaman) =>
-  `Barakallahu fiik, semoga menjadi pemberat timbangan kebaikan 🤍\n\nIni bacaan untukmu (Juz ${juz}, halaman ${halaman}):`;
+const PESAN_TAWARAN_TERJEMAH_TEMPLATE =
+  'Mau lanjut baca artinya juga? Balas *"ya"* atau *"nanti"* ya 😊';
+
+const PESAN_SETELAH_YA_ARAB_TEMPLATE = (suratAyat) =>
+  `Barakallahu fiik, semoga menjadi pemberat timbangan kebaikan 🤍\n\nIni bacaan untukmu (${suratAyat}):`;
+
+const PESAN_SETELAH_YA_TERJEMAH_TEMPLATE = (suratAyat) =>
+  `Ini artinya (${suratAyat}):`;
 
 const PESAN_SETELAH_TIDAK =
   'Tidak apa-apa, Sahabat 🤍 Semoga ada waktu lain untuk kembali dekat dengan Al-Qur\'an hari ini.\n\n"Sebaik-baik amalan adalah yang dilakukan secara rutin meskipun sedikit." (HR. Bukhari & Muslim)\n\nDawam akan selalu ada menemanimu, kapan pun kamu siap 🌙';
@@ -76,8 +92,26 @@ const PESAN_TANYA_NAMA =
 const PESAN_TANYA_LOKASI_TEMPLATE = (nama) =>
   `Senang berkenalan denganmu, ${nama} 🤍\n\nSatu lagi, kamu domisili di kota/daerah mana? Ini supaya Dawam bisa sesuaikan jadwal shalatnya nanti.`;
 
-const PESAN_ONBOARDING_SELESAI_TEMPLATE = (nama, lokasi) =>
-  `Siap, ${nama}! Dawam sudah catat domisilimu di ${lokasi} 📍`;
+const PESAN_TANYA_GENDER =
+  'Boleh tau, Dawam ngobrol sama Akhi atau Ukhti nih? 😊';
+
+const PESAN_TANYA_GENDER_ULANG =
+  'Maaf, Dawam belum nangkep jawabannya 🙏 Akhi (laki-laki) atau Ukhti (perempuan) ya?';
+
+const PESAN_TANYA_TARGET =
+  'Mau targetin khatam 1 juz berapa hari? Pilih salah satu ya:\n6 hari (santai, sesuai peta bawaan), 3 hari (sedang), atau 1 hari (cepat).';
+
+const PESAN_TANYA_TARGET_ULANG =
+  'Maaf, boleh dijawab salah satu dari: *6 hari*, *3 hari*, atau *1 hari*? 🙏';
+
+const PESAN_TANYA_MOTIVASI =
+  'Satu hal lagi. Kalau suatu saat kamu lagi males/berat buat baca Qur\'an, apa yang biasanya bisa bikin kamu semangat lagi? Boleh cerita singkat 😊';
+
+const PESAN_TANYA_MULAI_SURAT =
+  'Terakhir, kamu mau mulai tilawah dari surat/ayat apa? Kalau mau mulai dari awal (Al-Fatihah), balas aja *"dari awal"*.';
+
+const PESAN_ONBOARDING_SELESAI_TEMPLATE = (nama, lokasi, target) =>
+  `Siap, ${nama}! Dawam sudah catat domisilimu di ${lokasi}, dengan target khatam 1 juz per ${target} hari 📍`;
 
 const PESAN_PERKENALAN_PERAN =
   'Sedikit cerita soal Dawam ya 🤍\n\nSetiap hari, aku bakal ingetin kamu pas waktu shalat tiba — nggak lama-lama, cuma pengingat sederhana biar nggak kelewat.\n\nSelepas itu, aku juga bakal nanya apakah kamu mau lanjut tilawah sedikit. Nggak ada paksaan — kalau lagi sibuk atau belum sempat, bilang aja "nanti", aku nggak akan maksa 😊\n\nKalau kamu bilang mau, aku kirimin bacaan lanjutannya, dari halaman terakhir yang udah kamu baca. Pelan-pelan aja, yang penting konsisten.\n\nYuk kita mulai perjalanan ini bareng-bareng, semoga Allah mudahkan 🌙';
@@ -114,6 +148,7 @@ async function startBot() {
     } else if (connection === 'open') {
       console.log('\n✅ Berhasil terkoneksi ke WhatsApp!\n');
       setupScheduler();
+      setupSilentUserChecker();
       printHelp();
     }
   });
@@ -122,9 +157,6 @@ async function startBot() {
     const message = m.messages[0];
     if (!message.message || message.key.fromMe) return;
 
-    // Baileys versi baru kadang ngirim remoteJid sebagai @lid (linked id/privacy id)
-    // bukan JID asli @s.whatsapp.net. Kita normalisasi: kalau ada remoteJidAlt
-    // atau participant yang formatnya @s.whatsapp.net, pakai itu sebagai identitas utama.
     const sender = normalizeJid(message);
     const text = (
       message.message.conversation ||
@@ -142,27 +174,26 @@ async function startBot() {
   return sock;
 }
 
-// ========== NORMALISASI JID ==========
+// ========== NORMALISASI JID (existing, tidak berubah) ==========
 
-// WhatsApp sekarang kadang pakai @lid (privacy-preserving linked ID) sebagai remoteJid,
-// bukan nomor asli @s.whatsapp.net. Fungsi ini coba ambil JID "asli" kalau tersedia,
-// supaya state/progress yang disimpan pas kirim reminder (pakai @s.whatsapp.net)
-// nyambung sama pesan balasan yang masuk (yang mungkin keformat @lid).
 function normalizeJid(message) {
   const remoteJid = message.key.remoteJid;
-
-  // Baileys versi baru biasanya nyediain field senderPn / remoteJidAlt kalau
-  // remoteJid-nya berupa @lid, berisi nomor asli dalam format @s.whatsapp.net
-  const altJid =
-    message.key.senderPn || // beberapa versi pakai field ini
-    message.key.remoteJidAlt ||
-    null;
+  const altJid = message.key.senderPn || message.key.remoteJidAlt || null;
 
   if (remoteJid && remoteJid.endsWith('@lid') && altJid) {
     return altJid;
   }
 
   return remoteJid;
+}
+
+// Helper kecil: rapikan kapitalisasi tiap kata (dipakai di beberapa step onboarding)
+function rapikanKapital(text) {
+  return text
+    .split(' ')
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(' ');
 }
 
 // ========== HANDLER PESAN MASUK ==========
@@ -179,67 +210,94 @@ async function handleIncomingMessage(jid, text) {
     } else {
       console.log(`(User belum terdaftar, bukan keyword aktivasi, diabaikan: "${text}")`);
     }
-    return; // user belum terdaftar, flow lain (konfirmasi ngaji dll) belum berlaku
+    return;
   }
 
-  const state = getUserState(jid);
+  const user = getUser(jid);
+  const state = user.state;
 
+  // ---- §6.3: Pengecekan intent mode halangan, SEBELUM state check biasa ----
+  // Hanya berlaku untuk user gender P, dan HANYA jika state saat ini bukan state
+  // onboarding yang sangat spesifik (WAITING_NAME dll) -- supaya tidak salah tangkap
+  // jawaban nama/lokasi sebagai "aktifkan mode halangan".
+  const stateOnboardingKetat = ['WAITING_NAME', 'WAITING_LOCATION', 'WAITING_GENDER', 'WAITING_TARGET'];
+  if (user.gender === 'P' && !stateOnboardingKetat.includes(state)) {
+    const intentHalangan = await groqAI.parseModeHalanganIntent(text);
+    console.log(`(Cek intent halangan: ${intentHalangan})`);
+
+    if (intentHalangan === 'AKTIFKAN' && user.mode_baca_arab_saja === 1) {
+      setModeArabSaja(jid, false);
+      let konfirmasi = await groqAI.generateKonfirmasiModeHalangan(getUserName(jid), true);
+      if (!konfirmasi) konfirmasi = 'Baik, mode terjemah-saja sudah aktif untukmu 🤍 Istirahat dulu ya, Sahabat.';
+      await sock.sendMessage(jid, { text: konfirmasi });
+      return; // skip flow state biasa untuk pesan ini
+    }
+
+    if (intentHalangan === 'NONAKTIFKAN' && user.mode_baca_arab_saja === 0) {
+      setModeArabSaja(jid, true);
+      let konfirmasi = await groqAI.generateKonfirmasiModeHalangan(getUserName(jid), false);
+      if (!konfirmasi) konfirmasi = 'Alhamdulillah, mode normal sudah aktif lagi. Yuk lanjut tilawah seperti biasa 🤍';
+      await sock.sendMessage(jid, { text: konfirmasi });
+      return;
+    }
+    // TIDAK_RELEVAN -> lanjut ke flow state biasa di bawah
+  }
+
+  // ---- Flow state biasa ----
   if (state === 'WAITING_NAME') {
-    // Pakai teks asli (sebelum di-lowercase) biar nama ke-capture rapi.
-    // text di sini udah lowercase dari caller, jadi kita capitalize kata pertama tiap kata.
-    const namaRapi = text
-      .split(' ')
-      .filter(Boolean)
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ');
-
+    const namaRapi = rapikanKapital(text);
     setUserName(jid, namaRapi);
     setUserState(jid, 'WAITING_LOCATION');
     await sock.sendMessage(jid, { text: PESAN_TANYA_LOKASI_TEMPLATE(namaRapi) });
     console.log(`✅ Nama tersimpan untuk ${jid}: ${namaRapi}, menunggu lokasi...`);
   } else if (state === 'WAITING_LOCATION') {
-    const lokasiRapi = text
-      .split(' ')
-      .filter(Boolean)
-      .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-      .join(' ');
-
+    const lokasiRapi = rapikanKapital(text);
     setUserLocation(jid, lokasiRapi);
-    setUserState(jid, 'IDLE');
-    const nama = getUserName(jid) || 'Sahabat Dawam';
-    await sock.sendMessage(jid, { text: PESAN_ONBOARDING_SELESAI_TEMPLATE(nama, lokasiRapi) });
-    await sock.sendMessage(jid, { text: PESAN_PERKENALAN_PERAN });
-    console.log(`✅ Lokasi tersimpan untuk ${jid}: ${lokasiRapi}. Onboarding selesai.`);
-  } else if (state === 'WAITING_CONFIRM') {
-    const nama = getUserName(jid) || 'Sahabat Dawam';
-
-    // Dulu: pencocokan keyword persis. Sekarang: parsing intent via Groq,
-    // supaya jawaban bebas ("boleh deh", "nanti aja ya", dll) tetap kebaca.
-    const intent = await groqAI.parseIntentJawaban(text);
-    console.log(`(Intent terbaca: ${intent})`);
-
-    if (intent === 'YA') {
-      const responYa = await groqAI.generateResponYa(nama);
-      if (responYa) await sock.sendMessage(jid, { text: responYa });
-
-      await kirimBacaan(jid);
-      setUserState(jid, 'IDLE');
-    } else if (intent === 'TIDAK') {
-      let pesan = await groqAI.generateResponTidak(nama);
-      if (!pesan) pesan = PESAN_SETELAH_TIDAK;
-
-      await sock.sendMessage(jid, { text: pesan });
-      setUserState(jid, 'IDLE');
-    } else {
-      // TIDAK_JELAS -> tetap hidupin percakapan, state tetap WAITING_CONFIRM
-      let pesan = await groqAI.generateFallbackChat(nama, text);
-      if (!pesan) pesan = PESAN_TIDAK_DIMENGERTI;
-
-      await sock.sendMessage(jid, { text: pesan });
+    setUserState(jid, 'WAITING_GENDER');
+    await sock.sendMessage(jid, { text: PESAN_TANYA_GENDER });
+    console.log(`✅ Lokasi tersimpan untuk ${jid}: ${lokasiRapi}, menunggu gender...`);
+  } else if (state === 'WAITING_GENDER') {
+    const gender = await groqAI.parseGenderDariJawaban(text);
+    if (gender === 'TIDAK_JELAS') {
+      await sock.sendMessage(jid, { text: PESAN_TANYA_GENDER_ULANG });
+      return;
     }
+    setUserGender(jid, gender);
+    setUserState(jid, 'WAITING_TARGET');
+    await sock.sendMessage(jid, { text: PESAN_TANYA_TARGET });
+    console.log(`✅ Gender tersimpan untuk ${jid}: ${gender}, menunggu target...`);
+  } else if (state === 'WAITING_TARGET') {
+    const target = await groqAI.parseTargetDariJawaban(text);
+    if (target === 'TIDAK_JELAS') {
+      await sock.sendMessage(jid, { text: PESAN_TANYA_TARGET_ULANG });
+      return;
+    }
+    setUserTarget(jid, target);
+    setUserState(jid, 'WAITING_MOTIVASI');
+    await sock.sendMessage(jid, { text: PESAN_TANYA_MOTIVASI });
+    console.log(`✅ Target tersimpan untuk ${jid}: ${target} hari/juz, menunggu motivasi...`);
+  } else if (state === 'WAITING_MOTIVASI') {
+    // Simpan verbatim (teks asli lowercase sudah cukup sebagai catatan personal,
+    // tidak perlu dirapikan kapitalisasinya seperti nama/lokasi)
+    setUserMotivasi(jid, text);
+    setUserState(jid, 'WAITING_MULAI_SURAT');
+    await sock.sendMessage(jid, { text: PESAN_TANYA_MULAI_SURAT });
+    console.log(`✅ Motivasi tersimpan untuk ${jid}, menunggu titik mulai surat...`);
+  } else if (state === 'WAITING_MULAI_SURAT') {
+    await handleJawabanMulaiSurat(jid, text);
+  } else if (state === 'WAITING_CONFIRM') {
+    await handleJawabanTawaranNgaji(jid, text);
+  } else if (state === 'WAITING_CONFIRM_TERJEMAH') {
+    await handleJawabanTawaranTerjemah(jid, text);
+  } else if (state === 'WAITING_LANJUT_SESI') {
+    await handleJawabanLanjutSesi(jid, text);
+  } else if (state === 'WAITING_ALASAN_TIDAK_BACA') {
+    const nama = getUserName(jid) || 'Sahabat Dawam';
+    const pesan = await groqAI.generateFallbackChat(nama, text);
+    if (pesan) await sock.sendMessage(jid, { text: pesan });
+    setUserState(jid, 'IDLE');
   } else {
-    // Pesan di luar flow aktif (state IDLE dll) -> tetap dibales natural via Groq,
-    // biar percakapan kerasa hidup, bukan diabaikan begitu saja.
+    // IDLE atau state lain di luar flow aktif -> dibales natural via Groq
     const nama = getUserName(jid) || 'Sahabat Dawam';
     console.log(`(Pesan di luar flow aktif, dibales via Groq fallback)`);
     const pesan = await groqAI.generateFallbackChat(nama, text);
@@ -251,7 +309,325 @@ async function handleIncomingMessage(jid, text) {
   }
 }
 
-// ========== FUNGSI-FUNGSI TRIGGER ==========
+// ---- Sub-handler: WAITING_MULAI_SURAT (§3.1) ----
+async function handleJawabanMulaiSurat(jid, text) {
+  const nama = getUserName(jid) || 'Sahabat Dawam';
+  const lokasi = (await getUser(jid)).location;
+  const target = (await getUser(jid)).target_juz_per_hari;
+
+  const mauDariAwal = ['dari awal', 'awal', 'al-fatihah', 'fatihah'].includes(text.trim());
+
+  if (!mauDariAwal) {
+    const { surat } = await groqAI.parseSuratAyatDariJawaban(text);
+    setUserMulaiSurat(jid, text); // simpan raw text apapun hasilnya, buat referensi
+
+    if (surat) {
+      const bacaanDitemukan = cariBacaanBySuratLike(surat);
+      if (bacaanDitemukan) {
+        updateLastSentBacaanId(jid, bacaanDitemukan.id - 1); // -1 karena nextId = last_sent + 1
+        await sock.sendMessage(jid, {
+          text: `Siap, Dawam akan mulai dari sekitar ${bacaanDitemukan.surat_ayat} ya 🤍`,
+        });
+        await selesaikanOnboarding(jid, nama, lokasi, target);
+        return;
+      }
+    }
+
+    // Tidak ketemu / ambigu -> fallback mulai dari awal, beri tahu user
+    await sock.sendMessage(jid, {
+      text: 'Hmm, Dawam belum nemu posisi yang pas untuk itu di peta bacaan 🙏 Untuk sekarang kita mulai dari awal dulu ya, nanti bisa disesuaikan lagi.',
+    });
+  }
+
+  // last_sent_bacaan_id tetap default 0 (mulai dari awal)
+  await selesaikanOnboarding(jid, nama, lokasi, target);
+}
+
+async function selesaikanOnboarding(jid, nama, lokasi, target) {
+  setUserState(jid, 'IDLE');
+  await sock.sendMessage(jid, { text: PESAN_ONBOARDING_SELESAI_TEMPLATE(nama, lokasi, target) });
+  await sock.sendMessage(jid, { text: PESAN_PERKENALAN_PERAN });
+  console.log(`✅ Onboarding selesai untuk ${jid}.`);
+}
+
+// ---- Sub-handler: WAITING_CONFIRM (tawaran ngaji awal) ----
+async function handleJawabanTawaranNgaji(jid, text) {
+  const nama = getUserName(jid) || 'Sahabat Dawam';
+  const intent = await groqAI.parseIntentJawaban(text);
+  console.log(`(Intent tawaran ngaji: ${intent})`);
+
+  if (intent === 'YA') {
+    const responYa = await groqAI.generateResponYa(nama);
+    if (responYa) await sock.sendMessage(jid, { text: responYa });
+
+    resetNoResponse(jid); // §7.1: reset counter begitu user benar-benar mau baca
+    await kirimBacaanArab(jid);
+  } else if (intent === 'TIDAK') {
+    incrementNoResponse(jid); // §7.1
+    let pesan = await groqAI.generateResponTidak(nama);
+    if (!pesan) pesan = PESAN_SETELAH_TIDAK;
+    await sock.sendMessage(jid, { text: pesan });
+    setUserState(jid, 'IDLE');
+
+    await cekDanKirimPesan3xJikaPerlu(jid);
+  } else {
+    // TIDAK_JELAS -> tetap hidupin percakapan, state tetap WAITING_CONFIRM
+    let pesan = await groqAI.generateFallbackChat(nama, text);
+    if (!pesan) pesan = PESAN_TIDAK_DIMENGERTI;
+    await sock.sendMessage(jid, { text: pesan });
+  }
+}
+
+// ---- Sub-handler: WAITING_CONFIRM_TERJEMAH (§5) ----
+async function handleJawabanTawaranTerjemah(jid, text) {
+  const nama = getUserName(jid) || 'Sahabat Dawam';
+  const intent = await groqAI.parseIntentJawaban(text);
+  console.log(`(Intent tawaran terjemah: ${intent})`);
+
+  if (intent === 'YA') {
+    const user = getUser(jid);
+    const bacaan = getBacaanById(user.last_sent_bacaan_id); // row yang SAMA, belum berubah
+    if (bacaan) {
+      try {
+        await sock.sendMessage(jid, {
+          image: { url: path.join(__dirname, bacaan.path_indo) },
+          caption: PESAN_SETELAH_YA_TERJEMAH_TEMPLATE(bacaan.surat_ayat),
+        });
+        console.log(`✅ Terjemah terkirim ke ${jid}: ${bacaan.surat_ayat}`);
+      } catch (err) {
+        console.error('❌ Gagal kirim terjemah:', err.message);
+      }
+    }
+    await cekKecepatanDanTawarkanLanjut(jid);
+  } else if (intent === 'TIDAK') {
+    await cekKecepatanDanTawarkanLanjut(jid);
+  } else {
+    let pesan = await groqAI.generateFallbackChat(nama, text);
+    if (!pesan) pesan = PESAN_TIDAK_DIMENGERTI;
+    await sock.sendMessage(jid, { text: pesan });
+    // state tetap WAITING_CONFIRM_TERJEMAH
+  }
+}
+
+// ---- Sub-handler: WAITING_LANJUT_SESI (§4.3) ----
+async function handleJawabanLanjutSesi(jid, text) {
+  const nama = getUserName(jid) || 'Sahabat Dawam';
+  const intent = await groqAI.parseIntentJawaban(text);
+  console.log(`(Intent lanjut sesi: ${intent})`);
+
+  if (intent === 'YA') {
+    await kirimBacaanArab(jid); // lanjut kartu berikutnya, sesi sama
+  } else if (intent === 'TIDAK') {
+    const user = getUser(jid);
+    let pesan = await groqAI.generateIngatkanTargetAsli(nama, user.target_juz_per_hari);
+    if (pesan) await sock.sendMessage(jid, { text: pesan });
+    setUserState(jid, 'IDLE');
+  } else {
+    let pesan = await groqAI.generateFallbackChat(nama, text);
+    if (!pesan) pesan = PESAN_TIDAK_DIMENGERTI;
+    await sock.sendMessage(jid, { text: pesan });
+    // state tetap WAITING_LANJUT_SESI
+  }
+}
+
+// ========== LOGIC PENGIRIMAN BACAAN (§4) ==========
+
+async function kirimBacaanArab(jid) {
+  const user = getUser(jid);
+
+  if (user.mode_baca_arab_saja === 0) {
+    return kirimBacaanTerjemahSaja(jid);
+  }
+
+  let nextId = user.last_sent_bacaan_id + 1;
+  if (nextId > 900) {
+    nextId = 1; // TEMPORARY: looping balik ke awal
+  }
+
+  const bacaan = getBacaanById(nextId);
+  if (!bacaan) {
+    await sock.sendMessage(jid, { text: 'Maaf, data bacaan belum tersedia saat ini 🙏' });
+    console.log(`⚠️  Bacaan id=${nextId} tidak ditemukan di database (seed belum lengkap?).`);
+    return;
+  }
+
+  try {
+    await sock.sendMessage(jid, {
+      image: { url: path.join(__dirname, bacaan.path_arab) },
+      caption: PESAN_SETELAH_YA_ARAB_TEMPLATE(bacaan.surat_ayat),
+    });
+  } catch (err) {
+    console.error('❌ Gagal kirim bacaan Arab:', err.message);
+    return;
+  }
+
+  if (!user.tanggal_mulai_baca) {
+    setTanggalMulaiBaca(jid, new Date().toISOString().slice(0, 10)); // hanya terisi sekali
+  }
+
+  updateLastSentBacaanId(jid, nextId);
+  setUserState(jid, 'WAITING_CONFIRM_TERJEMAH');
+  console.log(`✅ Bacaan Arab terkirim ke ${jid}: ${bacaan.surat_ayat} (id=${nextId})`);
+}
+
+async function kirimBacaanTerjemahSaja(jid) {
+  const user = getUser(jid);
+
+  let nextId = user.last_sent_bacaan_id + 1;
+  if (nextId > 900) {
+    nextId = 1;
+  }
+
+  const bacaan = getBacaanById(nextId);
+  if (!bacaan) {
+    await sock.sendMessage(jid, { text: 'Maaf, data bacaan belum tersedia saat ini 🙏' });
+    console.log(`⚠️  Bacaan id=${nextId} tidak ditemukan (mode terjemah-saja).`);
+    return;
+  }
+
+  try {
+    await sock.sendMessage(jid, {
+      image: { url: path.join(__dirname, bacaan.path_indo) },
+      caption: PESAN_SETELAH_YA_TERJEMAH_TEMPLATE(bacaan.surat_ayat),
+    });
+  } catch (err) {
+    console.error('❌ Gagal kirim bacaan terjemah-saja:', err.message);
+    return;
+  }
+
+  if (!user.tanggal_mulai_baca) {
+    setTanggalMulaiBaca(jid, new Date().toISOString().slice(0, 10));
+  }
+
+  updateLastSentBacaanId(jid, nextId);
+  console.log(`✅ Terjemah-saja terkirim ke ${jid}: ${bacaan.surat_ayat} (id=${nextId})`);
+
+  // Mode terjemah-saja: tidak ada tawaran "mau Arab juga", langsung ke pengecekan kecepatan (§6.4)
+  await cekKecepatanDanTawarkanLanjut(jid);
+}
+
+// ---- §4.3: Deteksi kecepatan & tawaran lanjut ----
+async function cekKecepatanDanTawarkanLanjut(jid) {
+  const user = getUser(jid);
+
+  if (user.target_juz_per_hari === '6' || !user.target_juz_per_hari) {
+    setUserState(jid, 'IDLE');
+    return; // pace normal, tidak ada percepatan, tidak relevan
+  }
+
+  const bacaanTerakhir = getBacaanById(user.last_sent_bacaan_id);
+  if (!bacaanTerakhir || !user.tanggal_mulai_baca) {
+    setUserState(jid, 'IDLE');
+    return;
+  }
+
+  const hariTercapai = bacaanTerakhir.hari_global;
+  const hariBerjalan = hitungSelisihHari(user.tanggal_mulai_baca, new Date()) + 1;
+
+  let hariTarget;
+  if (user.target_juz_per_hari === '3') {
+    hariTarget = hariBerjalan * 2;
+  } else if (user.target_juz_per_hari === '1') {
+    hariTarget = hariBerjalan * 6;
+  } else {
+    setUserState(jid, 'IDLE');
+    return;
+  }
+
+  if (hariTercapai < hariTarget) {
+    const nama = getUserName(jid) || 'Sahabat Dawam';
+    let pesan = await groqAI.generateTawaranLanjutSesi(nama, user.target_juz_per_hari);
+    if (!pesan) {
+      pesan = `Mantap, ${nama}! Mau lanjut baca lagi sekarang biar makin dekat ke target ${user.target_juz_per_hari} hari/juz, atau cukup dulu?`;
+    }
+    await sock.sendMessage(jid, { text: pesan });
+    setUserState(jid, 'WAITING_LANJUT_SESI');
+  } else {
+    setUserState(jid, 'IDLE');
+  }
+}
+
+// Selisih hari kalender (dibulatkan ke bawah), dipakai untuk hariBerjalan di §4.3
+function hitungSelisihHari(tanggalMulaiISO, tanggalSekarang) {
+  const mulai = new Date(tanggalMulaiISO);
+  const sekarang = new Date(
+    tanggalSekarang.getFullYear(),
+    tanggalSekarang.getMonth(),
+    tanggalSekarang.getDate()
+  );
+  const mulaiTengahMalam = new Date(mulai.getFullYear(), mulai.getMonth(), mulai.getDate());
+  const selisihMs = sekarang - mulaiTengahMalam;
+  return Math.floor(selisihMs / (1000 * 60 * 60 * 24));
+}
+
+// ========== §7: COUNTER TIDAK BACA + PESAN MOTIVASI ==========
+
+async function cekDanKirimPesan3xJikaPerlu(jid) {
+  const user = getUser(jid);
+  if (user.consecutive_no_response >= 3) {
+    await kirimPesanSetelah3xTidakBaca(jid);
+  }
+}
+
+async function kirimPesanSetelah3xTidakBaca(jid) {
+  const user = getUser(jid);
+  const nama = getUserName(jid) || 'Sahabat Dawam';
+
+  if (user.gender === 'P' && user.mode_baca_arab_saja === 1) {
+    let pesanHalangan = await groqAI.generateTawaranModeHalangan(nama);
+    if (pesanHalangan) await sock.sendMessage(jid, { text: pesanHalangan });
+  }
+
+  let pesan = await groqAI.generatePesanSetelah3xTidakBaca(nama, user.motivasi_personal);
+  if (!pesan) {
+    pesan = `${nama}, Dawam notice kamu belum sempat tilawah beberapa kali terakhir 🤍 Ga apa-apa, boleh cerita lagi sibuk apa? Semangat terus ya, pelan-pelan juga gapapa.`;
+  }
+  await sock.sendMessage(jid, { text: pesan });
+
+  setUserState(jid, 'WAITING_ALASAN_TIDAK_BACA');
+  resetNoResponse(jid);
+  console.log(`✅ Pesan 3x-tidak-baca terkirim ke ${jid}, counter direset.`);
+}
+
+// ---- §7.3: Cron pengecekan silent user ----
+let silentCheckerSudahDiset = false;
+
+function setupSilentUserChecker() {
+  if (silentCheckerSudahDiset) return;
+  silentCheckerSudahDiset = true;
+
+  cron.schedule(INTERVAL_CRON_SILENT, async () => {
+    console.log('\n🔍 Menjalankan pengecekan silent user...');
+    const ambangMs = AMBANG_SILENT_JAM * 60 * 60 * 1000;
+    const sekarang = Date.now();
+
+    const silentUsers = getAllUsers().filter((u) => {
+      if (u.state !== 'WAITING_CONFIRM') return false;
+      if (!u.waktu_tawaran_terakhir) return false;
+      const waktuTawaran = new Date(u.waktu_tawaran_terakhir).getTime();
+      return sekarang - waktuTawaran > ambangMs;
+    });
+
+    for (const u of silentUsers) {
+      incrementNoResponse(u.jid);
+      setUserState(u.jid, 'IDLE');
+      console.log(`⏳ User ${u.jid} dianggap silent, counter naik.`);
+
+      const userTerbaru = getUser(u.jid);
+      if (userTerbaru.consecutive_no_response >= 3) {
+        await kirimPesanSetelah3xTidakBaca(u.jid);
+      }
+    }
+
+    if (silentUsers.length === 0) {
+      console.log('(Tidak ada silent user saat ini)');
+    }
+  });
+
+  console.log(`🕒 Silent user checker diset, jalan tiap 3 jam (ambang ${AMBANG_SILENT_JAM} jam diam).`);
+}
+
+// ========== FUNGSI-FUNGSI TRIGGER REMINDER ==========
 
 async function kirimReminderSholat(waktuSholat, jid) {
   if (!PESAN_REMINDER_SHOLAT[waktuSholat]) {
@@ -262,7 +638,6 @@ async function kirimReminderSholat(waktuSholat, jid) {
   getOrCreateUser(jid);
   const nama = getUserName(jid) || 'Sahabat Dawam';
 
-  // Coba generate pesan dinamis via Groq, fallback ke template statis kalau gagal
   let pesan = await groqAI.generateReminderSholat(waktuSholat, nama);
   if (!pesan) {
     console.log('⚠️  Groq gagal/kosong, pakai template statis sebagai fallback.');
@@ -277,9 +652,18 @@ async function kirimReminderSholat(waktuSholat, jid) {
 }
 
 async function kirimTawaranNgaji(jid) {
+  const user = getUser(jid);
   const nama = getUserName(jid) || 'Sahabat Dawam';
 
-  let pesan = await groqAI.generateTawaranNgaji(nama);
+  // §6.2a: tawarkan mode halangan hanya SEKALI, ke user gender P, saat tawaran pertama kali
+  const belumPernahDitawarkanMode = user.gender === 'P' && !user.waktu_tawaran_terakhir;
+
+  let pesan;
+  if (belumPernahDitawarkanMode) {
+    pesan = await groqAI.generateTawaranNgajiUntukP(nama);
+  } else {
+    pesan = await groqAI.generateTawaranNgaji(nama);
+  }
   if (!pesan) {
     console.log('⚠️  Groq gagal/kosong, pakai template statis sebagai fallback.');
     pesan = PESAN_TAWARAN_NGAJI_TEMPLATE(nama);
@@ -287,32 +671,11 @@ async function kirimTawaranNgaji(jid) {
 
   await sock.sendMessage(jid, { text: pesan });
   setUserState(jid, 'WAITING_CONFIRM');
+  setWaktuTawaranTerakhir(jid, new Date().toISOString());
   console.log(`✅ Tawaran ngaji terkirim ke ${jid}, menunggu balasan...`);
 }
 
-async function kirimBacaan(jid) {
-  const data = getNextAyatForUser(jid);
-
-  if (!data) {
-    await sock.sendMessage(jid, {
-      text: 'Maaf, data bacaan belum tersedia saat ini 🙏',
-    });
-    return;
-  }
-
-  try {
-    await sock.sendMessage(jid, {
-      image: { url: path.join(__dirname, data.image_path) },
-      caption: PESAN_SETELAH_YA_TEMPLATE(data.juz, data.halaman),
-    });
-    updateLastSentId(jid, data.id);
-    console.log(`✅ Bacaan terkirim ke ${jid}: Juz ${data.juz}, Halaman ${data.halaman}`);
-  } catch (err) {
-    console.error('❌ Gagal kirim bacaan:', err.message);
-  }
-}
-
-// ========== SCHEDULER OTOMATIS ==========
+// ========== SCHEDULER OTOMATIS (existing, tidak berubah) ==========
 
 let schedulerSudahDiset = false;
 
@@ -324,7 +687,7 @@ function setupScheduler() {
   schedulerSudahDiset = true;
 
   for (const [namaWaktu, jadwal] of Object.entries(JADWAL_SHOLAT)) {
-    const cronExpr = `${jadwal.menit} ${jadwal.jam} * * *`; // tiap hari, jam:menit tertentu
+    const cronExpr = `${jadwal.menit} ${jadwal.jam} * * *`;
 
     cron.schedule(cronExpr, async () => {
       console.log(`\n⏰ Waktu ${namaWaktu} tiba (${jadwal.jam}:${String(jadwal.menit).padStart(2, '0')}). Mengirim reminder otomatis...`);
@@ -342,7 +705,7 @@ function setupScheduler() {
   }
 }
 
-// ========== COMMAND MANUAL VIA TERMINAL ==========
+// ========== COMMAND MANUAL VIA TERMINAL (existing, tidak berubah) ==========
 
 function printHelp() {
   console.log('Bot siap.');
