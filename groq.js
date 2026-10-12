@@ -16,17 +16,25 @@ Gaya bicaramu:
 - Selalu panggil nama pengguna kalau nama diberikan
 - Singkat, padat, tidak bertele-tele (ini WhatsApp, bukan artikel)
 - Tidak menghakimi kalau pengguna menolak/menunda
-- Gunakan emoji secukupnya, jangan berlebihan`;
+- Gunakan emoji secukupnya, jangan berlebihan
+
+ATURAN PENULISAN WAJIB (PELANGGARAN = FATAL):
+- Tulis dengan kapitalisasi normal bahasa Indonesia: hanya huruf pertama kalimat dan nama diri yang kapital. DILARANG KERAS menulis Setiap Kata Diawali Huruf Besar (Title Case) seperti ini -- itu SALAH.
+- Jangan pernah membalas dengan salam/sapaan seperti "Wa'alaikumsalam" atau "Assalamu'alaikum" KECUALI kamu diminta secara eksplisit membuat pesan pembuka/salam. Kamu adalah BOT yang MENGIRIM pesan ke user, bukan user yang membalas salam ke kamu.
+- Jangan mengulang/menggemakan ucapan terima kasih atau sambutan dari pesan sebelumnya. Fokus HANYA pada instruksi yang diberikan di prompt saat ini, jangan membalas seolah menyambung percakapan lain yang tidak diminta.
+- Jangan menyisipkan isi dari pesan lain atau instruksi lain yang tidak diminta. Hasilkan HANYA pesan sesuai permintaan spesifik di prompt user, tidak lebih.
+- Selesaikan kalimat dengan lengkap, jangan terpotong di tengah.`;
 
 // ========== GENERATE PESAN DINAMIS (existing, tidak berubah) ==========
 
 async function generateReminderSholat(namaWaktu, namaUser) {
-  const prompt = `Buatkan SATU pesan singkat (maksimal 3-4 kalimat) untuk mengingatkan ${namaUser} bahwa waktu sholat ${namaWaktu} telah tiba.
+  const prompt = `Ini adalah pesan BARU yang kamu mulai sendiri (bukan balasan ke pesan user manapun). Buatkan SATU pesan singkat (maksimal 3-4 kalimat) untuk mengingatkan ${namaUser} bahwa waktu sholat ${namaWaktu} telah tiba.
+Pesan ini BOLEH diawali salam "Assalamu'alaikum" karena ini pesan pembuka dari kamu, TAPI jangan membalas seolah merespons salam dari user (user tidak mengirim salam apapun).
 Variasikan gaya bahasanya, jangan selalu sama persis tiap kali diminta.
 Boleh sesekali selipkan potongan ayat Qur'an atau hadits pendek yang relevan dengan shalat, tapi tidak wajib di setiap pesan.
 Balas HANYA dengan isi pesannya saja, tanpa tanda kutip, tanpa penjelasan tambahan.`;
 
-  return await callGroqText(prompt);
+  return await callGroqText(prompt, 300);
 }
 
 async function generateTawaranNgaji(namaUser) {
@@ -35,7 +43,7 @@ Di akhir pesan, minta dia membalas dengan kata-kata sederhana seperti "ya" atau 
 Variasikan gaya bahasanya tiap kali diminta, jangan selalu template yang sama.
 Balas HANYA dengan isi pesannya saja, tanpa tanda kutip, tanpa penjelasan tambahan.`;
 
-  return await callGroqText(prompt);
+  return await callGroqText(prompt, 400, { reasoning_effort: 'low' });
 }
 
 /**
@@ -53,14 +61,14 @@ Balas HANYA dengan isi pesannya saja, tanpa tanda kutip, tanpa penjelasan tambah
 }
 
 async function generateResponYa(namaUser) {
-  const prompt = `${namaUser} baru saja bilang "ya" (mau lanjut tilawah). Buatkan SATU kalimat pendek yang hangat dan menyemangati, sebelum bot mengirimkan gambar bacaan Al-Qur'an.
+  const prompt = `${namaUser} baru saja bilang "ya" (mau lanjut tilawah). Buatkan SATU kalimat pendek yang hangat dan menyemangati, SEBUTKAN namanya (${namaUser}) di kalimat itu, sebelum bot mengirimkan gambar bacaan Al-Qur'an.
 Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
   return await callGroqText(prompt);
 }
 
 async function generateResponTidak(namaUser) {
-  const prompt = `${namaUser} baru saja bilang "nanti"/belum siap untuk tilawah hari ini. Buatkan SATU pesan singkat yang hangat, tidak menghakimi, tetap menyemangati tanpa memaksa.
+  const prompt = `${namaUser} baru saja bilang "nanti"/belum siap untuk tilawah hari ini. Buatkan SATU pesan singkat yang hangat, tidak menghakimi, tetap menyemangati tanpa memaksa. SEBUTKAN namanya (${namaUser}) di pesan ini.
 Boleh sesekali selipkan hadits pendek tentang istiqomah/konsistensi dalam amal walau sedikit, tapi tidak wajib.
 Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
@@ -68,14 +76,14 @@ Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 }
 
 async function generateFallbackChat(namaUser, pesanUser) {
-  const prompt = `${namaUser ? namaUser : 'Seseorang'} mengirim pesan berikut ke kamu (Dawam) di luar konteks flow yang biasa (bukan jawaban ya/nanti untuk ajakan tilawah):
+  const prompt = `${namaUser ? namaUser : 'Seseorang'} baru saja mengirim SATU pesan ini ke kamu (Dawam) di WhatsApp, di luar konteks flow yang biasa (bukan jawaban ya/nanti untuk ajakan tilawah):
 
 "${pesanUser}"
 
-Balas pesan ini secara natural dan hangat sesuai karaktermu. Jika pesannya berupa sapaan atau obrolan ringan, tanggapi dengan ramah. Jika tidak relevan sama sekali dengan konteks ibadah, tetap balas dengan sopan dan coba arahkan kembali ke topik shalat/tilawah jika pas.
+Balas HANYA pesan di atas secara natural dan hangat sesuai karaktermu, sebagai balasan baru yang relevan dengan isi pesan tersebut. JANGAN mengulang, menggemakan, atau merujuk ke pesan-pesan sebelumnya di luar yang dikutip di atas -- anggap ini satu pesan berdiri sendiri. Jika pesannya berupa sapaan ringan, tanggapi singkat dan ramah. Jika tidak relevan sama sekali dengan ibadah, tetap balas sopan dan boleh arahkan kembali ke topik shalat/tilawah jika pas, tanpa memaksa.
 Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
-  return await callGroqText(prompt);
+  return await callGroqText(prompt, 300);
 }
 
 // ========== FUNGSI BARU PHASE 2: GENERATE PESAN ==========
@@ -84,7 +92,7 @@ Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
  * Tawaran baca terjemah setelah baca Arab (§5).
  */
 async function generateTawaranTerjemah(namaUser) {
-  const prompt = `${namaUser} baru saja selesai membaca kartu bacaan Arab. Buatkan SATU pesan singkat (2-3 kalimat) menanyakan apakah dia mau lanjut membaca artinya (terjemah) juga.
+  const prompt = `${namaUser} baru saja selesai membaca kartu bacaan Arab. Buatkan SATU pesan singkat (2-3 kalimat), SEBUTKAN namanya (${namaUser}), menanyakan apakah dia mau lanjut membaca artinya (terjemah) juga.
 Minta dia membalas dengan kata-kata sederhana seperti "ya" atau "nanti"/"tidak".
 Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
@@ -101,6 +109,29 @@ Minta dia membalas dengan kata sederhana seperti "ya"/"lanjut" atau "cukup"/"nan
 Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
   return await callGroqText(prompt);
+}
+
+/**
+ * Pesan saat user SUDAH mencapai/melampaui pace target hari ini (lawan dari
+ * generateTawaranLanjutSesi). Dikirim supaya user tidak dibiarkan diam tanpa kabar.
+ */
+async function generateSudahCapaiPace(namaUser, targetJuzPerHari) {
+  const prompt = `${namaUser} baru saja selesai membaca, dan progressnya sudah mencapai atau melampaui target pace hari ini (target: 1 juz per ${targetJuzPerHari} hari).
+Buatkan SATU pesan singkat (2-3 kalimat) yang hangat, memberi selamat/apresiasi atas pencapaian hari ini, sebut namanya, dan beri tahu bahwa dia bisa cukupkan dulu untuk sesi ini -- akan dilanjutkan lagi di waktu sholat berikutnya.
+Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
+
+  return await callGroqText(prompt, 300);
+}
+
+/**
+ * Penutup sesi singkat untuk target pace normal (6 hari/juz), setelah selesai baca/terjemah.
+ */
+async function generatePenutupSesiBiasa(namaUser) {
+  const prompt = `${namaUser} baru saja selesai sesi tilawahnya untuk waktu sholat ini (pace normal, tidak ada target kecepatan khusus).
+Buatkan SATU pesan penutup singkat (1-2 kalimat) yang hangat, sebut namanya, mengucapkan semoga menjadi amal baik, dan beri tahu akan ditemani lagi di waktu sholat berikutnya.
+Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
+
+  return await callGroqText(prompt, 250);
 }
 
 /**
@@ -296,15 +327,19 @@ Jika dia bilang "dari awal"/"Al-Fatihah"/tidak menyebutkan surat spesifik/jawaba
  * Return: 'AKTIFKAN' | 'NONAKTIFKAN' | 'TIDAK_RELEVAN'
  */
 async function parseModeHalanganIntent(pesanUser) {
-  const prompt = `Seorang pengguna (perempuan) sedang mengobrol dengan bot pengingat tilawah Al-Qur'an. Bot punya fitur "mode terjemah-saja" untuk saat pengguna sedang halangan (haid) dan tidak ingin/tidak bisa memegang mushaf Arab -- dalam mode ini bot hanya kirim bacaan terjemah, bukan Arab.
+  const prompt = `Seorang pengguna (perempuan) sedang mengobrol dengan bot pengingat tilawah Al-Qur'an. Bot punya fitur "mode terjemah-saja" untuk saat pengguna SEDANG HAID dan tidak ingin memegang mushaf Arab -- dalam mode ini bot hanya kirim bacaan terjemah, bukan Arab.
 
 Pesan dari pengguna:
 "${pesanUser}"
 
+ATURAN KETAT: defaultkan ke TIDAK_RELEVAN kecuali pesan SECARA EKSPLISIT dan JELAS menyebut kondisi haid/halangan/datang bulan, atau EKSPLISIT menyebut sudah selesai/suci dari itu. Jangan menyimpulkan dari konteks tidak langsung.
+
 Klasifikasikan niat pesan ini ke SALAH SATU:
-- AKTIFKAN (kalau dia memberi tahu sedang halangan/haid/tidak mau pegang mushaf dulu/minta terjemah saja dulu, dalam bentuk apapun)
-- NONAKTIFKAN (kalau dia memberi tahu sudah selesai halangan/sudah suci/mau baca Arab lagi/mau kembali ke mode normal)
-- TIDAK_RELEVAN (kalau pesan ini sama sekali tidak berkaitan dengan topik halangan/mode baca, misalnya obrolan biasa, pertanyaan lain, jawaban ya/nanti untuk ajakan tilawah, dll)
+- AKTIFKAN -- HANYA jika pengguna secara eksplisit bilang sedang haid/halangan/datang bulan/tidak suci (contoh: "aku lagi halangan", "lagi haid nih", "lagi datang bulan", "ga pegang mushaf dulu ya soalnya haid")
+- NONAKTIFKAN -- HANYA jika pengguna sedang dalam mode terjemah-saja DAN secara eksplisit bilang sudah selesai haid/sudah suci (contoh: "udah suci", "udah selesai haidnya", "udah bersih")
+- TIDAK_RELEVAN -- SEMUA kasus lain, termasuk: nama surat ("ar rahman"), kata umum "sudah selesai" tanpa konteks haid, "aku mau baca arab" (ini soal preferensi baca, BUKAN soal haid), pertanyaan, obrolan biasa, jawaban ya/nanti/lanjut untuk ajakan tilawah, atau apapun yang tidak eksplisit menyebut haid/halangan.
+
+Kata "sudah selesai" atau "aku mau baca arab" SENDIRIAN TANPA konteks haid sebelumnya HARUS diklasifikasikan TIDAK_RELEVAN, bukan NONAKTIFKAN.
 
 Balas HANYA dengan satu kata: AKTIFKAN, NONAKTIFKAN, atau TIDAK_RELEVAN.`;
 
@@ -320,7 +355,7 @@ Balas HANYA dengan satu kata: AKTIFKAN, NONAKTIFKAN, atau TIDAK_RELEVAN.`;
 
 // ========== HELPER: PANGGIL GROQ (existing, tidak berubah) ==========
 
-async function callGroqText(userPrompt, maxTokens = 200, extraOptions = {}) {
+async function callGroqText(userPrompt, maxTokens = 350, extraOptions = {}) {
   try {
     const completion = await groq.chat.completions.create({
       model: MODEL,
@@ -358,6 +393,8 @@ module.exports = {
   generateTawaranNgajiUntukP,
   generateTawaranTerjemah,
   generateTawaranLanjutSesi,
+  generateSudahCapaiPace,
+  generatePenutupSesiBiasa,
   generateIngatkanTargetAsli,
   generateTawaranModeHalangan,
   generatePesanSetelah3xTidakBaca,

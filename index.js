@@ -187,6 +187,18 @@ function normalizeJid(message) {
   return remoteJid;
 }
 
+// Helper: kirim pesan dengan jeda kecil opsional sebelumnya, supaya WhatsApp
+// tidak menumpuk beberapa pesan sekaligus (terlihat seperti "patah/nyambung aneh"
+// kalau dikirim persis bersamaan tanpa jeda).
+function tunggu(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function kirimPesan(jid, text, jedaMsSebelum = 0) {
+  if (jedaMsSebelum > 0) await tunggu(jedaMsSebelum);
+  return sock.sendMessage(jid, { text });
+}
+
 // Helper kecil: rapikan kapitalisasi tiap kata (dipakai di beberapa step onboarding)
 function rapikanKapital(text) {
   return text
@@ -204,8 +216,8 @@ async function handleIncomingMessage(jid, text) {
     if (text === KEYWORD_AKTIVASI) {
       registerUser(jid);
       setUserState(jid, 'WAITING_NAME');
-      await sock.sendMessage(jid, { text: PESAN_SELAMAT_DATANG });
-      await sock.sendMessage(jid, { text: PESAN_TANYA_NAMA });
+      await kirimPesan(jid, PESAN_SELAMAT_DATANG);
+      await kirimPesan(jid, PESAN_TANYA_NAMA, 1500);
       console.log(`✅ User baru teraktivasi: ${jid}, menunggu nama...`);
     } else {
       console.log(`(User belum terdaftar, bukan keyword aktivasi, diabaikan: "${text}")`);
@@ -220,8 +232,22 @@ async function handleIncomingMessage(jid, text) {
   // Hanya berlaku untuk user gender P, dan HANYA jika state saat ini bukan state
   // onboarding yang sangat spesifik (WAITING_NAME dll) -- supaya tidak salah tangkap
   // jawaban nama/lokasi sebagai "aktifkan mode halangan".
-  const stateOnboardingKetat = ['WAITING_NAME', 'WAITING_LOCATION', 'WAITING_GENDER', 'WAITING_TARGET'];
-  if (user.gender === 'P' && !stateOnboardingKetat.includes(state)) {
+  // Semua state yang menunggu jawaban SPESIFIK untuk sebuah pertanyaan aktif harus di-skip
+  // dari pengecekan mode halangan -- supaya jawaban user ("ya", "lanjut", nama surat, dst)
+  // tidak ditafsir ulang sebagai niat aktifkan/nonaktifkan mode terjemah-saja.
+  const stateFlowAktif = [
+    'WAITING_NAME',
+    'WAITING_LOCATION',
+    'WAITING_GENDER',
+    'WAITING_TARGET',
+    'WAITING_MOTIVASI',
+    'WAITING_MULAI_SURAT',
+    'WAITING_CONFIRM',
+    'WAITING_CONFIRM_TERJEMAH',
+    'WAITING_LANJUT_SESI',
+    'WAITING_ALASAN_TIDAK_BACA',
+  ];
+  if (user.gender === 'P' && !stateFlowAktif.includes(state)) {
     const intentHalangan = await groqAI.parseModeHalanganIntent(text);
     console.log(`(Cek intent halangan: ${intentHalangan})`);
 
@@ -345,8 +371,8 @@ async function handleJawabanMulaiSurat(jid, text) {
 
 async function selesaikanOnboarding(jid, nama, lokasi, target) {
   setUserState(jid, 'IDLE');
-  await sock.sendMessage(jid, { text: PESAN_ONBOARDING_SELESAI_TEMPLATE(nama, lokasi, target) });
-  await sock.sendMessage(jid, { text: PESAN_PERKENALAN_PERAN });
+  await kirimPesan(jid, PESAN_ONBOARDING_SELESAI_TEMPLATE(nama, lokasi, target));
+  await kirimPesan(jid, PESAN_PERKENALAN_PERAN, 1500); // jeda 1.5 detik biar ga numpuk
   console.log(`✅ Onboarding selesai untuk ${jid}.`);
 }
 
@@ -361,6 +387,7 @@ async function handleJawabanTawaranNgaji(jid, text) {
     if (responYa) await sock.sendMessage(jid, { text: responYa });
 
     resetNoResponse(jid); // §7.1: reset counter begitu user benar-benar mau baca
+    await tunggu(1500); // jeda kecil biar gambar ga numpuk sama pesan teks sebelumnya
     await kirimBacaanArab(jid);
   } else if (intent === 'TIDAK') {
     incrementNoResponse(jid); // §7.1
@@ -509,14 +536,19 @@ async function kirimBacaanTerjemahSaja(jid) {
 // ---- §4.3: Deteksi kecepatan & tawaran lanjut ----
 async function cekKecepatanDanTawarkanLanjut(jid) {
   const user = getUser(jid);
+  const nama = getUserName(jid) || 'Sahabat Dawam';
 
+  // Pace normal (target 6 hari/juz, atau belum pilih target) -> cukup kasih penutup singkat,
+  // tidak perlu bahas kecepatan sama sekali.
   if (user.target_juz_per_hari === '6' || !user.target_juz_per_hari) {
+    await tutupSesiBaca(jid, nama);
     setUserState(jid, 'IDLE');
-    return; // pace normal, tidak ada percepatan, tidak relevan
+    return;
   }
 
   const bacaanTerakhir = getBacaanById(user.last_sent_bacaan_id);
   if (!bacaanTerakhir || !user.tanggal_mulai_baca) {
+    await tutupSesiBaca(jid, nama);
     setUserState(jid, 'IDLE');
     return;
   }
@@ -530,12 +562,13 @@ async function cekKecepatanDanTawarkanLanjut(jid) {
   } else if (user.target_juz_per_hari === '1') {
     hariTarget = hariBerjalan * 6;
   } else {
+    await tutupSesiBaca(jid, nama);
     setUserState(jid, 'IDLE');
     return;
   }
 
   if (hariTercapai < hariTarget) {
-    const nama = getUserName(jid) || 'Sahabat Dawam';
+    // Masih di bawah pace -> tawarkan lanjut
     let pesan = await groqAI.generateTawaranLanjutSesi(nama, user.target_juz_per_hari);
     if (!pesan) {
       pesan = `Mantap, ${nama}! Mau lanjut baca lagi sekarang biar makin dekat ke target ${user.target_juz_per_hari} hari/juz, atau cukup dulu?`;
@@ -543,8 +576,24 @@ async function cekKecepatanDanTawarkanLanjut(jid) {
     await sock.sendMessage(jid, { text: pesan });
     setUserState(jid, 'WAITING_LANJUT_SESI');
   } else {
+    // Pace hari ini sudah tercapai/lampaui -> kasih tahu dengan jelas, jangan diam-diam IDLE
+    let pesan = await groqAI.generateSudahCapaiPace(nama, user.target_juz_per_hari);
+    if (!pesan) {
+      pesan = `Alhamdulillah, ${nama} sudah mencapai target hari ini (1 juz per ${user.target_juz_per_hari} hari) 🤍 Sampai jumpa di waktu sholat berikutnya ya!`;
+    }
+    await sock.sendMessage(jid, { text: pesan });
     setUserState(jid, 'IDLE');
   }
+}
+
+// Penutup singkat untuk pace normal (target 6 hari) atau kondisi data belum lengkap,
+// supaya user tetap tahu sesi membacanya sudah selesai, bukan diam tanpa kabar.
+async function tutupSesiBaca(jid, nama) {
+  let pesan = await groqAI.generatePenutupSesiBiasa(nama);
+  if (!pesan) {
+    pesan = `Barakallahu fiik, ${nama} 🤍 Sampai jumpa lagi di waktu sholat berikutnya.`;
+  }
+  await sock.sendMessage(jid, { text: pesan });
 }
 
 // Selisih hari kalender (dibulatkan ke bawah), dipakai untuk hariBerjalan di §4.3
