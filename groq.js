@@ -1,9 +1,11 @@
-const Groq = require('groq-sdk');
+const OpenAI = require('openai');
 
-// Ambil API key dari environment variable (JANGAN hardcode di sini)
-const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const groq = new OpenAI({
+  apiKey: process.env.AI_API_KEY,
+  baseURL: process.env.AI_BASE_URL,
+});
 
-const MODEL = 'openai/gpt-oss-120b';
+const MODEL = process.env.AI_MODEL;
 
 // ========== SYSTEM PROMPT DASAR (karakter Dawam) ==========
 
