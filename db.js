@@ -201,6 +201,32 @@ function setWaktuTawaranTerakhir(jid, tanggalISO) {
   db.prepare('UPDATE users SET waktu_tawaran_terakhir = ? WHERE jid = ?').run(tanggalISO, jid);
 }
 
+// Field yang wajib ada sebelum onboarding dianggap selesai
+const FIELD_ONBOARDING_WAJIB = ['name', 'location', 'gender', 'target_juz_per_hari', 'motivasi_personal'];
+// mulai_surat sengaja TIDAK wajib -- kalau kosong, default mulai dari awal (behavior lama tetap jalan)
+
+function getFieldOnboardingKosong(jid) {
+  const user = getUser(jid);
+  return FIELD_ONBOARDING_WAJIB.filter((f) => !user[f]);
+}
+
+function isOnboardingLengkap(jid) {
+  return getFieldOnboardingKosong(jid).length === 0;
+}
+
+// Update generik multi-field sekaligus, dipakai onboarding conversational.
+// Hanya field yang ada di `data` yang di-update (partial).
+function updateUserFields(jid, data) {
+  getOrCreateUser(jid);
+  const kolomValid = ['name', 'location', 'gender', 'target_juz_per_hari', 'motivasi_personal', 'mulai_surat'];
+  const entries = Object.entries(data).filter(([k, v]) => kolomValid.includes(k) && v !== null && v !== undefined && v !== '');
+  if (entries.length === 0) return;
+
+  const setClause = entries.map(([k]) => `${k} = ?`).join(', ');
+  const values = entries.map(([, v]) => v);
+  db.prepare(`UPDATE users SET ${setClause} WHERE jid = ?`).run(...values, jid);
+}
+
 // Hitung hari berjalan sejak mulai baca (dipakai tool get_progress_user)
 function hitungHariBerjalanUser(jid) {
   const user = getUser(jid);
@@ -245,4 +271,7 @@ module.exports = {
   setModeArabSaja,
   setWaktuTawaranTerakhir,
   hitungHariBerjalanUser,
+  getFieldOnboardingKosong,
+  isOnboardingLengkap,
+  updateUserFields,
 };
