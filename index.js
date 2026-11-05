@@ -229,9 +229,6 @@ async function handleIncomingMessage(jid, text) {
   const user = getUser(jid);
   const state = user.state;
 
-    const user = getUser(jid);
-  const state = user.state;
-
   // ---- Intent bebas: cek dulu apakah ini pertanyaan progress/lanjut, ----
   // ---- terlepas dari state apapun yang sedang aktif (kecuali flow sangat spesifik) ----
   const stateSangatSpesifik = ['WAITING_NAME', 'WAITING_LOCATION', 'WAITING_GENDER', 'WAITING_TARGET'];
