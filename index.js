@@ -34,6 +34,7 @@ const {
   setWaktuTawaranTerakhir,
 } = require('./db');
 const groqAI = require('./groq');
+const { buatToolExecutors } = require('./tools');
 
 // ========== KONFIGURASI ==========
 
@@ -227,6 +228,31 @@ async function handleIncomingMessage(jid, text) {
 
   const user = getUser(jid);
   const state = user.state;
+
+    const user = getUser(jid);
+  const state = user.state;
+
+  // ---- Intent bebas: cek dulu apakah ini pertanyaan progress/lanjut, ----
+  // ---- terlepas dari state apapun yang sedang aktif (kecuali flow sangat spesifik) ----
+  const stateSangatSpesifik = ['WAITING_NAME', 'WAITING_LOCATION', 'WAITING_GENDER', 'WAITING_TARGET'];
+  if (!stateSangatSpesifik.includes(state) && text.length > 1) {
+    const intentBebas = await groqAI.classifyIntentBebas(text);
+    console.log(`(Intent bebas: ${intentBebas})`);
+
+    if (intentBebas === 'TANYA_PROGRESS') {
+      const nama = getUserName(jid) || 'Sahabat Dawam';
+      const executors = buatToolExecutors(jid);
+      const jawaban = await groqAI.generateJawabanProgress(nama, text, executors);
+      if (jawaban) await sock.sendMessage(jid, { text: jawaban });
+      return; // tidak ganggu state yang sedang berjalan
+    }
+
+    if (intentBebas === 'MINTA_LANJUT' && state !== 'WAITING_CONFIRM' && state !== 'WAITING_LANJUT_SESI') {
+      resetNoResponse(jid);
+      await kirimBacaanArab(jid);
+      return;
+    }
+  }
 
   // ---- §6.3: Pengecekan intent mode halangan, SEBELUM state check biasa ----
   // Hanya berlaku untuk user gender P, dan HANYA jika state saat ini bukan state
