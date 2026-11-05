@@ -6,6 +6,7 @@ const groq = new OpenAI({
 });
 
 const MODEL = process.env.AI_MODEL;
+const { TOOLS_SCHEMA } = require('./tools');
 
 // ========== SYSTEM PROMPT DASAR (karakter Dawam) ==========
 
@@ -89,6 +90,48 @@ Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 }
 
 // ========== FUNGSI BARU PHASE 2: GENERATE PESAN ==========
+
+async function generateJawabanProgress(namaUser, pesanUser, toolExecutors) {
+  const messages = [
+    {
+      role: 'system',
+      content: SYSTEM_PROMPT + '\n\nUser sedang bertanya soal progress tilawahnya. WAJIB panggil tool yang relevan dulu untuk ambil data asli sebelum menjawab -- JANGAN PERNAH mengarang posisi bacaan, juz, atau target.',
+    },
+    { role: 'user', content: `${namaUser} bertanya: "${pesanUser}"` },
+  ];
+
+  try {
+    const first = await groq.chat.completions.create({
+      model: MODEL,
+      messages,
+      tools: TOOLS_SCHEMA,
+      max_tokens: 400,
+    });
+
+    const msg = first.choices[0]?.message;
+    if (!msg) return null;
+
+    if (msg.tool_calls?.length) {
+      messages.push(msg);
+      for (const call of msg.tool_calls) {
+        const executor = toolExecutors[call.function.name];
+        const result = executor ? executor() : { error: 'tool tidak ditemukan' };
+        messages.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          content: JSON.stringify(result),
+        });
+      }
+      const final = await groq.chat.completions.create({ model: MODEL, messages, max_tokens: 400 });
+      return final.choices[0]?.message?.content?.trim() || null;
+    }
+
+    return msg.content?.trim() || null;
+  } catch (err) {
+    console.error('❌ Gagal generateJawabanProgress:', err.message);
+    return null;
+  }
+}
 
 /**
  * Tawaran baca terjemah setelah baca Arab (§5).
@@ -220,6 +263,25 @@ Balas HANYA dengan satu kata: YA, TIDAK, atau TIDAK_JELAS. Tanpa penjelasan tamb
 
   console.log(`⚠️  Groq balas di luar format yang diharapkan: "${hasil}", pakai fallback keyword.`);
   return fallbackKeywordIntent(pesanUser);
+}
+
+async function classifyIntentBebas(pesanUser) {
+  const prompt = `Klasifikasikan pesan user berikut ke SALAH SATU kategori:
+
+"${pesanUser}"
+
+- TANYA_PROGRESS (nanya posisi bacaan, udah sampe mana, udah berapa juz, target gimana)
+- MINTA_LANJUT (minta dikirimkan bacaan lagi / lanjut baca sekarang)
+- LAINNYA (semua yang lain -- jawaban flow aktif, curhat, sapaan, dll)
+
+Balas HANYA satu kata: TANYA_PROGRESS, MINTA_LANJUT, atau LAINNYA.`;
+
+  const hasil = await callGroqText(prompt, 50, { temperature: 0.1 });
+  if (!hasil) return 'LAINNYA';
+  const cleaned = hasil.trim().toUpperCase();
+  if (cleaned.includes('TANYA_PROGRESS')) return 'TANYA_PROGRESS';
+  if (cleaned.includes('MINTA_LANJUT')) return 'MINTA_LANJUT';
+  return 'LAINNYA';
 }
 
 function fallbackKeywordIntent(pesanUser) {
@@ -407,4 +469,6 @@ module.exports = {
   parseTargetDariJawaban,
   parseSuratAyatDariJawaban,
   parseModeHalanganIntent,
+  generateJawabanProgress,
+  classifyIntentBebas,
 };
