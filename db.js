@@ -244,4 +244,5 @@ module.exports = {
   resetNoResponse,
   setModeArabSaja,
   setWaktuTawaranTerakhir,
+  hitungHariBerjalanUser,
 };
