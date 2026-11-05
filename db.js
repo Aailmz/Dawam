@@ -31,6 +31,29 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS groups (
+    jid TEXT PRIMARY KEY,
+    nama TEXT,
+    is_aktif INTEGER DEFAULT 0,
+    mode TEXT DEFAULT 'SHARED',
+    target_juz_per_hari TEXT,
+    last_sent_bacaan_id INTEGER DEFAULT 0,
+    tanggal_mulai_baca TEXT,
+    state TEXT DEFAULT 'IDLE',
+    waktu_tawaran_terakhir TEXT
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS group_members (
+    group_jid TEXT NOT NULL,
+    user_jid TEXT NOT NULL,
+    joined_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (group_jid, user_jid)
+  )
+`);
+
 // Migrasi: tabel 'ayat' (generic image, Phase 1) sudah digantikan tabel 'bacaan'.
 // Drop kalau masih ada peninggalan dari versi lama -- aman dijalankan walau tabelnya
 // sudah tidak ada (IF EXISTS) atau walau db masih fresh (tidak melakukan apa-apa).
@@ -238,6 +261,65 @@ function hitungHariBerjalanUser(jid) {
   return Math.floor((sekarangTengahMalam - mulaiTengahMalam) / (1000 * 60 * 60 * 24)) + 1;
 }
 
+// ========== GROUPS ==========
+
+function getOrCreateGroup(jid, nama = null) {
+  let group = db.prepare('SELECT * FROM groups WHERE jid = ?').get(jid);
+  if (!group) {
+    db.prepare('INSERT INTO groups (jid, nama) VALUES (?, ?)').run(jid, nama);
+    group = db.prepare('SELECT * FROM groups WHERE jid = ?').get(jid);
+  }
+  return group;
+}
+
+function getGroup(jid) {
+  return db.prepare('SELECT * FROM groups WHERE jid = ?').get(jid);
+}
+
+function isGroupAktif(jid) {
+  const g = getGroup(jid);
+  return !!g && g.is_aktif === 1;
+}
+
+function aktifkanGroup(jid, mode, targetJuzPerHari) {
+  getOrCreateGroup(jid);
+  db.prepare(
+    'UPDATE groups SET is_aktif = 1, mode = ?, target_juz_per_hari = ? WHERE jid = ?'
+  ).run(mode, targetJuzPerHari, jid);
+}
+
+function setGroupState(jid, state) {
+  getOrCreateGroup(jid);
+  db.prepare('UPDATE groups SET state = ? WHERE jid = ?').run(state, jid);
+}
+
+function updateGroupLastSentBacaanId(jid, newId) {
+  db.prepare('UPDATE groups SET last_sent_bacaan_id = ? WHERE jid = ?').run(newId, jid);
+}
+
+function setGroupTanggalMulaiBaca(jid, tanggalISO) {
+  db.prepare('UPDATE groups SET tanggal_mulai_baca = ? WHERE jid = ?').run(tanggalISO, jid);
+}
+
+function setGroupWaktuTawaranTerakhir(jid, tanggalISO) {
+  db.prepare('UPDATE groups SET waktu_tawaran_terakhir = ? WHERE jid = ?').run(tanggalISO, jid);
+}
+
+function getAllGroupsAktif() {
+  return db.prepare('SELECT * FROM groups WHERE is_aktif = 1').all();
+}
+
+function tambahAnggotaGroup(groupJid, userJid) {
+  getOrCreateGroup(groupJid);
+  db.prepare(
+    'INSERT OR IGNORE INTO group_members (group_jid, user_jid) VALUES (?, ?)'
+  ).run(groupJid, userJid);
+}
+
+function getAnggotaGroup(groupJid) {
+  return db.prepare('SELECT user_jid FROM group_members WHERE group_jid = ?').all(groupJid).map((r) => r.user_jid);
+}
+
 module.exports = {
   db,
 
@@ -274,4 +356,17 @@ module.exports = {
   getFieldOnboardingKosong,
   isOnboardingLengkap,
   updateUserFields,
+
+  // groups
+  getOrCreateGroup,
+  getGroup,
+  isGroupAktif,
+  aktifkanGroup,
+  setGroupState,
+  updateGroupLastSentBacaanId,
+  setGroupTanggalMulaiBaca,
+  setGroupWaktuTawaranTerakhir,
+  getAllGroupsAktif,
+  tambahAnggotaGroup,
+  getAnggotaGroup,
 };
