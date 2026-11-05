@@ -417,6 +417,79 @@ Balas HANYA dengan satu kata: AKTIFKAN, NONAKTIFKAN, atau TIDAK_RELEVAN.`;
   return 'TIDAK_RELEVAN';
 }
 
+/**
+ * Extract SEMUA field onboarding yang bisa ditangkap dari satu pesan user,
+ * partial-fill -- field yang tidak disebutkan tetap null (tidak menimpa data lama).
+ */
+async function extractDataOnboarding(pesanUser, fieldMasihKosong) {
+  const systemPromptJson = `Kamu parser onboarding bot islami "Dawam". Jawab HANYA JSON valid, tanpa markdown fence.`;
+
+  const userPrompt = `Field yang masih perlu diisi: ${fieldMasihKosong.join(', ')}.
+
+Pesan user: "${pesanUser}"
+
+Extract SEBANYAK MUNGKIN field berikut KALAU disebutkan/tersirat jelas di pesan (boleh lebih dari satu field sekaligus kalau user jawab gabungan):
+- name: nama panggilan (rapikan Kapital Awal Kata)
+- location: kota/daerah domisili (rapikan Kapital Awal Kata)
+- gender: "L" (laki-laki/akhi) atau "P" (perempuan/ukhti)
+- target_juz_per_hari: "6", "3", atau "1" (hari per juz)
+- motivasi_personal: cerita singkat apa yang bikin semangat baca Qur'an (simpan apa adanya, lowercase oke)
+- mulai_surat: nama surat kalau user sebut mau mulai dari situ, null kalau "dari awal"/tidak disebut
+
+Field yang TIDAK disebutkan di pesan ini -> null. Balas JSON:
+{"name": null, "location": null, "gender": null, "target_juz_per_hari": null, "motivasi_personal": null, "mulai_surat": null}`;
+
+  try {
+    const completion = await groq.chat.completions.create({
+      model: MODEL,
+      messages: [
+        { role: 'system', content: systemPromptJson },
+        { role: 'user', content: userPrompt },
+      ],
+      max_tokens: 250,
+      temperature: 0.2,
+    });
+    const result = completion.choices[0]?.message?.content?.trim();
+    if (!result) return {};
+    const cleaned = result.replace(/```json|```/g, '').trim();
+    return JSON.parse(cleaned);
+  } catch (err) {
+    console.error('❌ Gagal extractDataOnboarding:', err.message);
+    return {};
+  }
+}
+
+/**
+ * Generate pesan natural: terima kasih atas info yang baru masuk (kalau ada),
+ * lalu tanya field berikutnya yang masih kosong, ngobrol bukan nge-form.
+ */
+async function generateLanjutanOnboarding(namaUser, fieldBaruTerisi, fieldMasihKosong, pesanUserTerakhir) {
+  if (fieldMasihKosong.length === 0) return null; // sudah lengkap, dihandle terpisah
+
+  const labelField = {
+    name: 'nama panggilan',
+    location: 'domisili/kota',
+    gender: 'akhi atau ukhti',
+    target_juz_per_hari: 'target khatam (6 hari/3 hari/1 hari per juz)',
+    motivasi_personal: 'apa yang bikin semangat baca Qur an kalau lagi males',
+    mulai_surat: 'mau mulai tilawah dari surat apa (boleh skip, defaultnya dari awal)',
+  };
+
+  const fieldBerikutnya = labelField[fieldMasihKosong[0]];
+
+  const prompt = `Kamu lagi kenalan santai sama ${namaUser || 'user baru'} lewat chat, ngumpulin info buat setup tilawah-nya (nama, domisili, gender akhi/ukhti, target khatam, motivasi, mulai dari surat apa).
+
+Pesan terakhir dari user: "${pesanUserTerakhir}"
+${fieldBaruTerisi.length > 0 ? `Info yang baru aja kamu dapet dari pesan itu: ${fieldBaruTerisi.join(', ')}.` : 'Belum ada info baru yang ketangkep dari pesan ini (mungkin kurang jelas).'}
+
+Yang masih perlu kamu tanyakan berikutnya: ${fieldBerikutnya}.
+
+Buatkan SATU balasan singkat (2-3 kalimat), ngobrol natural kayak temen kenalan -- KALAU ada info baru, respon dulu singkat (contoh: "wah dari Bandung ya" / "oke Rina, salam kenal!"), baru lanjut nanya hal berikutnya dengan santai, JANGAN kaku kayak form/kuesioner. Kalau field berikutnya soal target khatam, sebutkan 3 pilihannya (6/3/1 hari per juz) secara natural dalam kalimat, bukan bullet list.
+Balas HANYA isi pesannya, tanpa tanda kutip.`;
+
+  return await callGroqText(prompt, 300);
+}
+
 // ========== HELPER: PANGGIL GROQ (existing, tidak berubah) ==========
 
 async function callGroqText(userPrompt, maxTokens = 350, extraOptions = {}) {
@@ -471,4 +544,6 @@ module.exports = {
   parseModeHalanganIntent,
   generateJawabanProgress,
   classifyIntentBebas,
+  extractDataOnboarding,
+  generateLanjutanOnboarding,
 };
