@@ -201,6 +201,17 @@ function setWaktuTawaranTerakhir(jid, tanggalISO) {
   db.prepare('UPDATE users SET waktu_tawaran_terakhir = ? WHERE jid = ?').run(tanggalISO, jid);
 }
 
+// Hitung hari berjalan sejak mulai baca (dipakai tool get_progress_user)
+function hitungHariBerjalanUser(jid) {
+  const user = getUser(jid);
+  if (!user.tanggal_mulai_baca) return null;
+  const mulai = new Date(user.tanggal_mulai_baca);
+  const sekarang = new Date();
+  const mulaiTengahMalam = new Date(mulai.getFullYear(), mulai.getMonth(), mulai.getDate());
+  const sekarangTengahMalam = new Date(sekarang.getFullYear(), sekarang.getMonth(), sekarang.getDate());
+  return Math.floor((sekarangTengahMalam - mulaiTengahMalam) / (1000 * 60 * 60 * 24)) + 1;
+}
+
 module.exports = {
   db,
 
