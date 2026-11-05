@@ -5,18 +5,17 @@ const db = new Database(path.join(__dirname, 'dawam.db'));
 
 // ========== SKEMA ==========
 
-// Tabel 'bacaan' GANTI tabel 'ayat' lama (§1.3)
 db.exec(`
   CREATE TABLE IF NOT EXISTS bacaan (
-    id INTEGER PRIMARY KEY,              -- 1 sampai 900, selaras dengan kode B/T
-    hari_global INTEGER NOT NULL,        -- 1 sampai 180
-    hari_dalam_juz INTEGER NOT NULL,     -- 1 sampai 6
-    juz INTEGER NOT NULL,                -- 1 sampai 30
-    waktu_sholat TEXT NOT NULL,          -- 'subuh' | 'dzuhur' | 'ashar' | 'maghrib' | 'isya'
-    surat_ayat TEXT NOT NULL,            -- contoh: "Al-Baqarah 142-143"
-    jumlah_kata INTEGER,                 -- dari kolom "Kata" di PDF
-    path_arab TEXT NOT NULL,             -- contoh: "images/arab_0031.jpg"
-    path_indo TEXT NOT NULL              -- contoh: "images/indo_0031.jpg"
+    id INTEGER PRIMARY KEY,
+    hari_global INTEGER NOT NULL,
+    hari_dalam_juz INTEGER NOT NULL,
+    juz INTEGER NOT NULL,
+    waktu_sholat TEXT NOT NULL,
+    surat_ayat TEXT NOT NULL,
+    jumlah_kata INTEGER,
+    path_arab TEXT NOT NULL,
+    path_indo TEXT NOT NULL
   )
 `);
 
@@ -31,17 +30,17 @@ db.exec(`
   )
 `);
 
+// Grup: MURNI ruang sosial (lapor progress, saling semangatin, ngobrol).
+// Bacaan (gambar Arab/terjemah) TIDAK PERNAH dikirim ke grup -- selalu personal.
+// Makanya tabel ini TIDAK punya kolom last_sent_bacaan_id / tanggal_mulai_baca
+// seperti tabel users; progress tetap 100% bersumber dari tabel users per anggota.
 db.exec(`
   CREATE TABLE IF NOT EXISTS groups (
     jid TEXT PRIMARY KEY,
     nama TEXT,
     is_aktif INTEGER DEFAULT 0,
-    mode TEXT DEFAULT 'SHARED',
-    target_juz_per_hari TEXT,
-    last_sent_bacaan_id INTEGER DEFAULT 0,
-    tanggal_mulai_baca TEXT,
     state TEXT DEFAULT 'IDLE',
-    waktu_tawaran_terakhir TEXT
+    waktu_motivasi_terakhir TEXT   -- dipakai buat jarak-in broadcast ajakan ngobrol ringan
   )
 `);
 
@@ -54,9 +53,21 @@ db.exec(`
   )
 `);
 
+// Log ringan aktivitas yang dilaporkan/dideteksi di grup, dipakai buat rekap sederhana
+// ("siapa aja yang cerita progress minggu ini"). Bukan sumber kebenaran progress --
+// sumber kebenaran progress tetap tabel users.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS group_activity_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    group_jid TEXT NOT NULL,
+    user_jid TEXT NOT NULL,
+    jenis TEXT NOT NULL,          -- 'LAPOR_PROGRESS' | 'MOTIVASI_DIKIRIM' | 'TANYA_PROGRESS'
+    catatan TEXT,                 -- ringkasan singkat opsional
+    waktu TEXT DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
 // Migrasi: tabel 'ayat' (generic image, Phase 1) sudah digantikan tabel 'bacaan'.
-// Drop kalau masih ada peninggalan dari versi lama -- aman dijalankan walau tabelnya
-// sudah tidak ada (IF EXISTS) atau walau db masih fresh (tidak melakukan apa-apa).
 const tabelLamaMasihAda = db
   .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='ayat'`)
   .get();
@@ -65,27 +76,30 @@ if (tabelLamaMasihAda) {
   console.log('✅ Tabel "ayat" (lama, Phase 1) dihapus — digantikan tabel "bacaan".');
 }
 
-// Migrasi kolom baru di 'users' (§2). SQLite tidak punya "ADD COLUMN IF NOT EXISTS",
-// jadi kita cek dulu kolom yang sudah ada sebelum ALTER, supaya aman dijalankan berkali-kali.
-function tambahKolomJikaBelumAda(namaKolom, definisiKolom) {
-  const kolomSaatIni = db.prepare(`PRAGMA table_info(users)`).all().map((k) => k.name);
+// Migrasi kolom baru di 'users'. SQLite tidak punya "ADD COLUMN IF NOT EXISTS",
+// jadi cek dulu kolom yang sudah ada sebelum ALTER.
+function tambahKolomJikaBelumAda(namaTabel, namaKolom, definisiKolom) {
+  const kolomSaatIni = db.prepare(`PRAGMA table_info(${namaTabel})`).all().map((k) => k.name);
   if (!kolomSaatIni.includes(namaKolom)) {
-    db.exec(`ALTER TABLE users ADD COLUMN ${namaKolom} ${definisiKolom}`);
-    console.log(`✅ Kolom users.${namaKolom} ditambahkan.`);
+    db.exec(`ALTER TABLE ${namaTabel} ADD COLUMN ${namaKolom} ${definisiKolom}`);
+    console.log(`✅ Kolom ${namaTabel}.${namaKolom} ditambahkan.`);
   }
 }
 
-tambahKolomJikaBelumAda('gender', 'TEXT');
-tambahKolomJikaBelumAda('target_juz_per_hari', 'TEXT');
-tambahKolomJikaBelumAda('motivasi_personal', 'TEXT');
-tambahKolomJikaBelumAda('mulai_surat', 'TEXT');
-tambahKolomJikaBelumAda('last_sent_bacaan_id', 'INTEGER DEFAULT 0');
-tambahKolomJikaBelumAda('tanggal_mulai_baca', 'TEXT');
-tambahKolomJikaBelumAda('consecutive_no_response', 'INTEGER DEFAULT 0');
-tambahKolomJikaBelumAda('mode_baca_arab_saja', 'INTEGER DEFAULT 1');
-tambahKolomJikaBelumAda('waktu_tawaran_terakhir', 'TEXT');
+tambahKolomJikaBelumAda('users', 'gender', 'TEXT');
+tambahKolomJikaBelumAda('users', 'target_juz_per_hari', 'TEXT');
+tambahKolomJikaBelumAda('users', 'motivasi_personal', 'TEXT');
+tambahKolomJikaBelumAda('users', 'mulai_surat', 'TEXT');
+tambahKolomJikaBelumAda('users', 'last_sent_bacaan_id', 'INTEGER DEFAULT 0');
+tambahKolomJikaBelumAda('users', 'tanggal_mulai_baca', 'TEXT');
+tambahKolomJikaBelumAda('users', 'consecutive_no_response', 'INTEGER DEFAULT 0');
+tambahKolomJikaBelumAda('users', 'mode_baca_arab_saja', 'INTEGER DEFAULT 1');
+tambahKolomJikaBelumAda('users', 'waktu_tawaran_terakhir', 'TEXT');
+// Grup sosial yang jadi "rumah" user ini buat lapor progress (opsional, boleh null).
+// Satu user hanya terhubung ke satu grup sosial primary untuk kesederhanaan prototype.
+tambahKolomJikaBelumAda('users', 'group_sosial_jid', 'TEXT');
 
-// ========== BACAAN (gantikan fungsi-fungsi AYAT lama) ==========
+// ========== BACAAN ==========
 
 function insertBacaan(row) {
   const stmt = db.prepare(`
@@ -106,7 +120,6 @@ function getBacaanById(id) {
   return db.prepare('SELECT * FROM bacaan WHERE id = ?').get(id);
 }
 
-// Cari bacaan berdasarkan surat_ayat (dipakai §3.1 saat parsing "mulai dari surat tertentu")
 function cariBacaanBySuratLike(suratKeyword) {
   return db
     .prepare('SELECT * FROM bacaan WHERE surat_ayat LIKE ? ORDER BY id ASC LIMIT 1')
@@ -169,8 +182,6 @@ function getAllUsers() {
   return db.prepare('SELECT * FROM users').all();
 }
 
-// ---- Kolom-kolom baru Phase 2 ----
-
 function setUserGender(jid, gender) {
   getOrCreateUser(jid);
   db.prepare('UPDATE users SET gender = ? WHERE jid = ?').run(gender, jid);
@@ -214,7 +225,6 @@ function resetNoResponse(jid) {
 }
 
 function setModeArabSaja(jid, aktif) {
-  // aktif: true -> mode normal (arab+terjemah), false -> mode terjemah-saja
   getOrCreateUser(jid);
   db.prepare('UPDATE users SET mode_baca_arab_saja = ? WHERE jid = ?').run(aktif ? 1 : 0, jid);
 }
@@ -224,9 +234,15 @@ function setWaktuTawaranTerakhir(jid, tanggalISO) {
   db.prepare('UPDATE users SET waktu_tawaran_terakhir = ? WHERE jid = ?').run(tanggalISO, jid);
 }
 
-// Field yang wajib ada sebelum onboarding dianggap selesai
+function setGroupSosialUser(jid, groupJid) {
+  getOrCreateUser(jid);
+  db.prepare('UPDATE users SET group_sosial_jid = ? WHERE jid = ?').run(groupJid, jid);
+}
+
+// ========== ONBOARDING CONVERSATIONAL (phase 2) ==========
+
 const FIELD_ONBOARDING_WAJIB = ['name', 'location', 'gender', 'target_juz_per_hari', 'motivasi_personal'];
-// mulai_surat sengaja TIDAK wajib -- kalau kosong, default mulai dari awal (behavior lama tetap jalan)
+// mulai_surat sengaja TIDAK wajib -- kalau kosong, default mulai dari awal.
 
 function getFieldOnboardingKosong(jid) {
   const user = getUser(jid);
@@ -237,12 +253,12 @@ function isOnboardingLengkap(jid) {
   return getFieldOnboardingKosong(jid).length === 0;
 }
 
-// Update generik multi-field sekaligus, dipakai onboarding conversational.
-// Hanya field yang ada di `data` yang di-update (partial).
 function updateUserFields(jid, data) {
   getOrCreateUser(jid);
   const kolomValid = ['name', 'location', 'gender', 'target_juz_per_hari', 'motivasi_personal', 'mulai_surat'];
-  const entries = Object.entries(data).filter(([k, v]) => kolomValid.includes(k) && v !== null && v !== undefined && v !== '');
+  const entries = Object.entries(data || {}).filter(
+    ([k, v]) => kolomValid.includes(k) && v !== null && v !== undefined && v !== ''
+  );
   if (entries.length === 0) return;
 
   const setClause = entries.map(([k]) => `${k} = ?`).join(', ');
@@ -261,7 +277,7 @@ function hitungHariBerjalanUser(jid) {
   return Math.floor((sekarangTengahMalam - mulaiTengahMalam) / (1000 * 60 * 60 * 24)) + 1;
 }
 
-// ========== GROUPS ==========
+// ========== GROUPS (murni sosial, phase 3) ==========
 
 function getOrCreateGroup(jid, nama = null) {
   let group = db.prepare('SELECT * FROM groups WHERE jid = ?').get(jid);
@@ -281,11 +297,9 @@ function isGroupAktif(jid) {
   return !!g && g.is_aktif === 1;
 }
 
-function aktifkanGroup(jid, mode, targetJuzPerHari) {
-  getOrCreateGroup(jid);
-  db.prepare(
-    'UPDATE groups SET is_aktif = 1, mode = ?, target_juz_per_hari = ? WHERE jid = ?'
-  ).run(mode, targetJuzPerHari, jid);
+function aktifkanGroup(jid, nama = null) {
+  getOrCreateGroup(jid, nama);
+  db.prepare('UPDATE groups SET is_aktif = 1 WHERE jid = ?').run(jid);
 }
 
 function setGroupState(jid, state) {
@@ -293,16 +307,9 @@ function setGroupState(jid, state) {
   db.prepare('UPDATE groups SET state = ? WHERE jid = ?').run(state, jid);
 }
 
-function updateGroupLastSentBacaanId(jid, newId) {
-  db.prepare('UPDATE groups SET last_sent_bacaan_id = ? WHERE jid = ?').run(newId, jid);
-}
-
-function setGroupTanggalMulaiBaca(jid, tanggalISO) {
-  db.prepare('UPDATE groups SET tanggal_mulai_baca = ? WHERE jid = ?').run(tanggalISO, jid);
-}
-
-function setGroupWaktuTawaranTerakhir(jid, tanggalISO) {
-  db.prepare('UPDATE groups SET waktu_tawaran_terakhir = ? WHERE jid = ?').run(tanggalISO, jid);
+function setGroupWaktuMotivasiTerakhir(jid, tanggalISO) {
+  getOrCreateGroup(jid);
+  db.prepare('UPDATE groups SET waktu_motivasi_terakhir = ? WHERE jid = ?').run(tanggalISO, jid);
 }
 
 function getAllGroupsAktif() {
@@ -318,6 +325,28 @@ function tambahAnggotaGroup(groupJid, userJid) {
 
 function getAnggotaGroup(groupJid) {
   return db.prepare('SELECT user_jid FROM group_members WHERE group_jid = ?').all(groupJid).map((r) => r.user_jid);
+}
+
+function catatAktivitasGroup(groupJid, userJid, jenis, catatan = null) {
+  db.prepare(
+    'INSERT INTO group_activity_log (group_jid, user_jid, jenis, catatan) VALUES (?, ?, ?, ?)'
+  ).run(groupJid, userJid, jenis, catatan);
+}
+
+// Rekap ringan: anggota grup + progress masing-masing (dari tabel users), buat ditampilkan
+// saat ada yang nanya "progress grup gimana" atau buat broadcast motivasi mingguan.
+function getRekapProgressGroup(groupJid) {
+  const anggotaJids = getAnggotaGroup(groupJid);
+  return anggotaJids.map((jid) => {
+    const user = getUser(jid);
+    const bacaan = getBacaanById(user.last_sent_bacaan_id);
+    return {
+      nama: user.name || 'Sahabat',
+      posisi_terakhir: bacaan?.surat_ayat || 'belum mulai',
+      juz_sekarang: bacaan?.juz ?? null,
+      target_hari_per_juz: user.target_juz_per_hari || 'belum ditentukan',
+    };
+  });
 }
 
 module.exports = {
@@ -352,21 +381,25 @@ module.exports = {
   resetNoResponse,
   setModeArabSaja,
   setWaktuTawaranTerakhir,
-  hitungHariBerjalanUser,
+  setGroupSosialUser,
+
+  // onboarding conversational
+  FIELD_ONBOARDING_WAJIB,
   getFieldOnboardingKosong,
   isOnboardingLengkap,
   updateUserFields,
+  hitungHariBerjalanUser,
 
-  // groups
+  // groups - phase 3 (sosial)
   getOrCreateGroup,
   getGroup,
   isGroupAktif,
   aktifkanGroup,
   setGroupState,
-  updateGroupLastSentBacaanId,
-  setGroupTanggalMulaiBaca,
-  setGroupWaktuTawaranTerakhir,
+  setGroupWaktuMotivasiTerakhir,
   getAllGroupsAktif,
   tambahAnggotaGroup,
   getAnggotaGroup,
+  catatAktivitasGroup,
+  getRekapProgressGroup,
 };

@@ -32,9 +32,22 @@ const {
   resetNoResponse,
   setModeArabSaja,
   setWaktuTawaranTerakhir,
-  // phase 3 - onboarding conversational
+  setGroupSosialUser,
+  // onboarding conversational
   getFieldOnboardingKosong,
   updateUserFields,
+  // phase 3 - groups (sosial)
+  getOrCreateGroup,
+  getGroup,
+  isGroupAktif,
+  aktifkanGroup,
+  setGroupState,
+  setGroupWaktuMotivasiTerakhir,
+  getAllGroupsAktif,
+  tambahAnggotaGroup,
+  getAnggotaGroup,
+  catatAktivitasGroup,
+  getRekapProgressGroup,
 } = require('./db');
 const groqAI = require('./groq');
 const { buatToolExecutors } = require('./tools');
@@ -44,6 +57,7 @@ const { buatToolExecutors } = require('./tools');
 const JEDA_TAWARAN_MS = 1 * 60 * 1000; // 1 menit (prototype)
 const AMBANG_SILENT_JAM = 6; // silent user dianggap no-response setelah 6 jam (§7.3)
 const INTERVAL_CRON_SILENT = '0 */3 * * *'; // tiap 3 jam
+const INTERVAL_CRON_MOTIVASI_GROUP = '0 16 * * 5'; // tiap Jumat jam 16:00, ajakan ngobrol ke grup aktif
 
 const JADWAL_SHOLAT = {
   subuh: { jam: 4, menit: 20 },
@@ -53,13 +67,15 @@ const JADWAL_SHOLAT = {
   isya: { jam: 18, menit: 55 },
 };
 
+let BOT_JID_NORMALIZED = null; // diisi setelah sock connect, dipakai deteksi mention/reply
+
 function getRegisteredTargets() {
   return getAllUsers()
     .filter((u) => u.is_registered === 1)
     .map((u) => u.jid);
 }
 
-// ========== PESAN STATIS (fallback kalau Groq/AI gagal) ==========
+// ========== PESAN STATIS (fallback kalau AI gagal) ==========
 
 const PESAN_REMINDER_SHOLAT = {
   subuh: 'Assalamu\'alaikum 🌙\nWaktu Subuh telah tiba. Yuk, mulai hari dengan sujud pertama kita kepada Allah ﷻ.\n\n"Dan dirikanlah shalat, sesungguhnya shalat itu mencegah dari (perbuatan-perbuatan) keji dan mungkar." (QS. Al-Ankabut: 45)',
@@ -87,11 +103,10 @@ const PESAN_TIDAK_DIMENGERTI =
 const PESAN_SELAMAT_DATANG =
   'Assalamu\'alaikum warahmatullahi wabarakatuh 🌙\n\nSelamat datang di *Dawam* — teman harianmu untuk istiqomah shalat dan tilawah Al-Qur\'an.\n\nMulai sekarang, Dawam akan mengingatkanmu di setiap waktu shalat dan menemanimu tilawah sedikit demi sedikit, tanpa beban.\n\n"Sebaik-baik amalan di sisi Allah adalah yang dikerjakan secara terus-menerus (dawam), walaupun sedikit." (HR. Bukhari & Muslim)\n\nBarakallahu fiik, Sahabat Dawam 🤍';
 
-// Pembuka onboarding conversational -- santai, bukan form "siapa nama kamu?"
 const PESAN_PEMBUKA_ONBOARDING =
   'Sebelum lanjut, kenalan dulu yuk 😊 Nama panggilannya siapa, dan domisili di mana?';
 
-// Template fallback per-field (dipakai HANYA kalau generateLanjutanOnboarding gagal/null)
+// Template fallback per-field (dipakai HANYA kalau AI gagal total)
 const PESAN_TANYA_NAMA = 'Boleh kasih tahu Dawam, siapa nama panggilanmu? 😊';
 const PESAN_TANYA_LOKASI_TEMPLATE = (nama) =>
   `Senang berkenalan denganmu, ${nama} 🤍 Kamu domisili di kota/daerah mana?`;
@@ -108,6 +123,10 @@ const PESAN_PERKENALAN_PERAN =
   'Sedikit cerita soal Dawam ya 🤍\n\nSetiap hari, aku bakal ingetin kamu pas waktu shalat tiba — nggak lama-lama, cuma pengingat sederhana biar nggak kelewat.\n\nSelepas itu, aku juga bakal nanya apakah kamu mau lanjut tilawah sedikit. Nggak ada paksaan — kalau lagi sibuk atau belum sempat, bilang aja "nanti", aku nggak akan maksa 😊\n\nKalau kamu bilang mau, aku kirimin bacaan lanjutannya, dari halaman terakhir yang udah kamu baca. Pelan-pelan aja, yang penting konsisten.\n\nOh iya, kamu juga bisa nanya aku kapan aja kok -- soal progress bacaanmu, mau lanjut baca, atau sekadar cerita. Yuk kita mulai perjalanan ini bareng-bareng, semoga Allah mudahkan 🌙';
 
 const KEYWORD_AKTIVASI = 'dawam';
+
+// Pesan fallback statis kalau AI gagal total untuk fitur grup (jarang kepakai)
+const PESAN_GROUP_SETUP_FALLBACK =
+  'Assalamu\'alaikum 🌙 Dawam aktif di grup ini sebagai teman cerita progress tilawah dan saling menyemangati.\n\nBacaan Al-Qur\'an tetap dikirim personal ke chat pribadi masing-masing ya, biar nggak spam grup. Mau ngobrol sama Dawam di sini? Tinggal tag/mention atau reply pesan Dawam 😊';
 
 // ========== BOT LOGIC ==========
 
@@ -138,8 +157,10 @@ async function startBot() {
       if (shouldReconnect) startBot();
     } else if (connection === 'open') {
       console.log('\n✅ Berhasil terkoneksi ke WhatsApp!\n');
+      BOT_JID_NORMALIZED = sock.user?.id?.split(':')[0] || null;
       setupScheduler();
       setupSilentUserChecker();
+      setupGroupMotivasiScheduler();
       printHelp();
     }
   });
@@ -148,7 +169,9 @@ async function startBot() {
     const message = m.messages[0];
     if (!message.message || message.key.fromMe) return;
 
-    const sender = normalizeJid(message);
+    const remoteJid = message.key.remoteJid;
+    const isGroup = remoteJid.endsWith('@g.us');
+
     const text = (
       message.message.conversation ||
       message.message.extendedTextMessage?.text ||
@@ -157,9 +180,16 @@ async function startBot() {
       .trim()
       .toLowerCase();
 
-    console.log(`\n📩 Pesan masuk dari ${sender}: "${text}"`);
-
-    await handleIncomingMessage(sender, text);
+    if (isGroup) {
+      const sender = message.key.participant || message.key.senderPn;
+      if (!sender) return; // tidak bisa identifikasi pengirim, abaikan
+      console.log(`\n📩 [GRUP ${remoteJid}] Pesan dari ${sender}: "${text}"`);
+      await handleIncomingGroupMessage(remoteJid, sender, text, message);
+    } else {
+      const sender = normalizeJid(message);
+      console.log(`\n📩 Pesan masuk dari ${sender}: "${text}"`);
+      await handleIncomingMessage(sender, text);
+    }
   });
 
   return sock;
@@ -178,8 +208,19 @@ function normalizeJid(message) {
   return remoteJid;
 }
 
-// Helper: kirim pesan dengan jeda kecil opsional sebelumnya, supaya WhatsApp
-// tidak menumpuk beberapa pesan sekaligus.
+// Cek apakah bot di-mention langsung di pesan grup, atau pesan ini reply ke pesan bot.
+function apakahBotDitag(message) {
+  const contextInfo = message.message?.extendedTextMessage?.contextInfo;
+  if (!contextInfo || !BOT_JID_NORMALIZED) return false;
+
+  const mentionedJids = contextInfo.mentionedJid || [];
+  const diMention = mentionedJids.some((j) => j.startsWith(BOT_JID_NORMALIZED));
+  const diReplyKeBot = contextInfo.participant && contextInfo.participant.startsWith(BOT_JID_NORMALIZED);
+
+  return diMention || !!diReplyKeBot;
+}
+
+// Helper: kirim pesan dengan jeda kecil opsional sebelumnya.
 function tunggu(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -189,7 +230,7 @@ async function kirimPesan(jid, text, jedaMsSebelum = 0) {
   return sock.sendMessage(jid, { text });
 }
 
-// ========== HANDLER PESAN MASUK ==========
+// ========== HANDLER PESAN PERSONAL ==========
 
 async function handleIncomingMessage(jid, text) {
   // Cek dulu: apakah user belum terdaftar dan ngirim keyword aktivasi?
@@ -211,8 +252,6 @@ async function handleIncomingMessage(jid, text) {
 
   // ---- Intent bebas: cek dulu apakah ini pertanyaan progress/lanjut, ----
   // ---- terlepas dari state apapun yang sedang aktif (kecuali ONBOARDING) ----
-  // ONBOARDING dikecualikan karena jawaban user di situ sering pendek/ambigu
-  // (misal "3 hari") dan ditangani langsung oleh handleOnboardingTurn.
   const stateDikecualikanDariIntentBebas = ['ONBOARDING'];
   if (!stateDikecualikanDariIntentBebas.includes(state) && text.length > 1) {
     const intentBebas = await groqAI.classifyIntentBebas(text);
@@ -223,7 +262,7 @@ async function handleIncomingMessage(jid, text) {
       const executors = buatToolExecutors(jid);
       const jawaban = await groqAI.generateJawabanProgress(nama, text, executors);
       if (jawaban) await sock.sendMessage(jid, { text: jawaban });
-      return; // tidak ganggu state yang sedang berjalan
+      return;
     }
 
     if (
@@ -238,9 +277,6 @@ async function handleIncomingMessage(jid, text) {
   }
 
   // ---- §6.3: Pengecekan intent mode halangan, SEBELUM state check biasa ----
-  // Hanya berlaku untuk user gender P, dan HANYA jika state saat ini bukan state
-  // flow yang menunggu jawaban spesifik -- supaya tidak salah tangkap jawaban
-  // flow sebagai "aktifkan mode halangan".
   const stateFlowAktif = [
     'ONBOARDING',
     'WAITING_CONFIRM',
@@ -257,7 +293,7 @@ async function handleIncomingMessage(jid, text) {
       let konfirmasi = await groqAI.generateKonfirmasiModeHalangan(getUserName(jid), true);
       if (!konfirmasi) konfirmasi = 'Baik, mode terjemah-saja sudah aktif untukmu 🤍 Istirahat dulu ya, Sahabat.';
       await sock.sendMessage(jid, { text: konfirmasi });
-      return; // skip flow state biasa untuk pesan ini
+      return;
     }
 
     if (intentHalangan === 'NONAKTIFKAN' && user.mode_baca_arab_saja === 0) {
@@ -267,7 +303,6 @@ async function handleIncomingMessage(jid, text) {
       await sock.sendMessage(jid, { text: konfirmasi });
       return;
     }
-    // TIDAK_RELEVAN -> lanjut ke flow state biasa di bawah
   }
 
   // ---- Flow state biasa ----
@@ -285,7 +320,6 @@ async function handleIncomingMessage(jid, text) {
     if (pesan) await sock.sendMessage(jid, { text: pesan });
     setUserState(jid, 'IDLE');
   } else {
-    // IDLE atau state lain di luar flow aktif -> dibales natural via AI
     const nama = getUserName(jid) || 'Sahabat Dawam';
     console.log(`(Pesan di luar flow aktif, dibales via fallback chat)`);
     const pesan = await groqAI.generateFallbackChat(nama, text);
@@ -297,7 +331,7 @@ async function handleIncomingMessage(jid, text) {
   }
 }
 
-// ---- Sub-handler: ONBOARDING conversational (ganti 5 state linear lama) ----
+// ---- Sub-handler: ONBOARDING conversational ----
 async function handleOnboardingTurn(jid, text) {
   const fieldKosongSebelum = getFieldOnboardingKosong(jid);
 
@@ -310,11 +344,9 @@ async function handleOnboardingTurn(jid, text) {
   const fieldKosongSesudah = getFieldOnboardingKosong(jid);
 
   if (fieldKosongSesudah.length === 0) {
-    // Semua field wajib sudah terisi -> tutup onboarding.
     const namaFinal = getUserName(jid) || 'Sahabat Dawam';
     const userFinal = getUser(jid);
 
-    // mulai_surat tetap optional: kalau user sempat sebut, coba cari posisinya (§3.1 lama)
     if (userFinal.mulai_surat) {
       const mauDariAwal = ['dari awal', 'awal', 'al-fatihah', 'fatihah'].includes(
         userFinal.mulai_surat.trim().toLowerCase()
@@ -324,7 +356,7 @@ async function handleOnboardingTurn(jid, text) {
         if (surat) {
           const bacaanDitemukan = cariBacaanBySuratLike(surat);
           if (bacaanDitemukan) {
-            updateLastSentBacaanId(jid, bacaanDitemukan.id - 1); // -1 karena nextId = last_sent + 1
+            updateLastSentBacaanId(jid, bacaanDitemukan.id - 1);
             await sock.sendMessage(jid, {
               text: `Siap, Dawam akan mulai dari sekitar ${bacaanDitemukan.surat_ayat} ya 🤍`,
             });
@@ -337,7 +369,6 @@ async function handleOnboardingTurn(jid, text) {
     return;
   }
 
-  // Belum lengkap -> balas natural, lanjut nanya field berikutnya yang masih kosong
   const pesan = await groqAI.generateLanjutanOnboarding(
     getUserName(jid),
     fieldBaruTerisi,
@@ -348,7 +379,6 @@ async function handleOnboardingTurn(jid, text) {
   if (pesan) {
     await sock.sendMessage(jid, { text: pesan });
   } else {
-    // Fallback template per-field kalau AI gagal total
     const fallbackMap = {
       name: PESAN_TANYA_NAMA,
       location: PESAN_TANYA_LOKASI_TEMPLATE(getUserName(jid) || 'Sahabat'),
@@ -369,7 +399,7 @@ async function handleOnboardingTurn(jid, text) {
 async function selesaikanOnboarding(jid, nama, lokasi, target) {
   setUserState(jid, 'IDLE');
   await kirimPesan(jid, PESAN_ONBOARDING_SELESAI_TEMPLATE(nama, lokasi, target));
-  await kirimPesan(jid, PESAN_PERKENALAN_PERAN, 1500); // jeda 1.5 detik biar ga numpuk
+  await kirimPesan(jid, PESAN_PERKENALAN_PERAN, 1500);
   console.log(`✅ Onboarding selesai untuk ${jid}.`);
 }
 
@@ -383,11 +413,11 @@ async function handleJawabanTawaranNgaji(jid, text) {
     const responYa = await groqAI.generateResponYa(nama);
     if (responYa) await sock.sendMessage(jid, { text: responYa });
 
-    resetNoResponse(jid); // §7.1: reset counter begitu user benar-benar mau baca
-    await tunggu(1500); // jeda kecil biar gambar ga numpuk sama pesan teks sebelumnya
+    resetNoResponse(jid);
+    await tunggu(1500);
     await kirimBacaanArab(jid);
   } else if (intent === 'TIDAK') {
-    incrementNoResponse(jid); // §7.1
+    incrementNoResponse(jid);
     let pesan = await groqAI.generateResponTidak(nama);
     if (!pesan) pesan = PESAN_SETELAH_TIDAK;
     await sock.sendMessage(jid, { text: pesan });
@@ -395,7 +425,6 @@ async function handleJawabanTawaranNgaji(jid, text) {
 
     await cekDanKirimPesan3xJikaPerlu(jid);
   } else {
-    // TIDAK_JELAS -> tetap hidupin percakapan, state tetap WAITING_CONFIRM
     let pesan = await groqAI.generateFallbackChat(nama, text);
     if (!pesan) pesan = PESAN_TIDAK_DIMENGERTI;
     await sock.sendMessage(jid, { text: pesan });
@@ -410,7 +439,7 @@ async function handleJawabanTawaranTerjemah(jid, text) {
 
   if (intent === 'YA') {
     const user = getUser(jid);
-    const bacaan = getBacaanById(user.last_sent_bacaan_id); // row yang SAMA, belum berubah
+    const bacaan = getBacaanById(user.last_sent_bacaan_id);
     if (bacaan) {
       try {
         await sock.sendMessage(jid, {
@@ -429,7 +458,6 @@ async function handleJawabanTawaranTerjemah(jid, text) {
     let pesan = await groqAI.generateFallbackChat(nama, text);
     if (!pesan) pesan = PESAN_TIDAK_DIMENGERTI;
     await sock.sendMessage(jid, { text: pesan });
-    // state tetap WAITING_CONFIRM_TERJEMAH
   }
 }
 
@@ -440,7 +468,7 @@ async function handleJawabanLanjutSesi(jid, text) {
   console.log(`(Intent lanjut sesi: ${intent})`);
 
   if (intent === 'YA') {
-    await kirimBacaanArab(jid); // lanjut kartu berikutnya, sesi sama
+    await kirimBacaanArab(jid);
   } else if (intent === 'TIDAK') {
     const user = getUser(jid);
     let pesan = await groqAI.generateIngatkanTargetAsli(nama, user.target_juz_per_hari);
@@ -450,11 +478,12 @@ async function handleJawabanLanjutSesi(jid, text) {
     let pesan = await groqAI.generateFallbackChat(nama, text);
     if (!pesan) pesan = PESAN_TIDAK_DIMENGERTI;
     await sock.sendMessage(jid, { text: pesan });
-    // state tetap WAITING_LANJUT_SESI
   }
 }
 
-// ========== LOGIC PENGIRIMAN BACAAN (§4) ==========
+// ========== LOGIC PENGIRIMAN BACAAN -- SELALU PERSONAL (§4) ==========
+// PENTING: fungsi-fungsi ini HANYA pernah dipanggil dengan jid personal (@s.whatsapp.net),
+// TIDAK PERNAH dengan jid grup. Bacaan tidak pernah dikirim ke grup.
 
 async function kirimBacaanArab(jid) {
   const user = getUser(jid);
@@ -465,7 +494,7 @@ async function kirimBacaanArab(jid) {
 
   let nextId = user.last_sent_bacaan_id + 1;
   if (nextId > 900) {
-    nextId = 1; // TEMPORARY: looping balik ke awal
+    nextId = 1;
   }
 
   const bacaan = getBacaanById(nextId);
@@ -486,7 +515,7 @@ async function kirimBacaanArab(jid) {
   }
 
   if (!user.tanggal_mulai_baca) {
-    setTanggalMulaiBaca(jid, new Date().toISOString().slice(0, 10)); // hanya terisi sekali
+    setTanggalMulaiBaca(jid, new Date().toISOString().slice(0, 10));
   }
 
   updateLastSentBacaanId(jid, nextId);
@@ -526,7 +555,6 @@ async function kirimBacaanTerjemahSaja(jid) {
   updateLastSentBacaanId(jid, nextId);
   console.log(`✅ Terjemah-saja terkirim ke ${jid}: ${bacaan.surat_ayat} (id=${nextId})`);
 
-  // Mode terjemah-saja: tidak ada tawaran "mau Arab juga", langsung ke pengecekan kecepatan (§6.4)
   await cekKecepatanDanTawarkanLanjut(jid);
 }
 
@@ -535,8 +563,6 @@ async function cekKecepatanDanTawarkanLanjut(jid) {
   const user = getUser(jid);
   const nama = getUserName(jid) || 'Sahabat Dawam';
 
-  // Pace normal (target 6 hari/juz, atau belum pilih target) -> cukup kasih penutup singkat,
-  // tidak perlu bahas kecepatan sama sekali.
   if (user.target_juz_per_hari === '6' || !user.target_juz_per_hari) {
     await tutupSesiBaca(jid, nama);
     setUserState(jid, 'IDLE');
@@ -565,7 +591,6 @@ async function cekKecepatanDanTawarkanLanjut(jid) {
   }
 
   if (hariTercapai < hariTarget) {
-    // Masih di bawah pace -> tawarkan lanjut
     let pesan = await groqAI.generateTawaranLanjutSesi(nama, user.target_juz_per_hari);
     if (!pesan) {
       pesan = `Mantap, ${nama}! Mau lanjut baca lagi sekarang biar makin dekat ke target ${user.target_juz_per_hari} hari/juz, atau cukup dulu?`;
@@ -573,7 +598,6 @@ async function cekKecepatanDanTawarkanLanjut(jid) {
     await sock.sendMessage(jid, { text: pesan });
     setUserState(jid, 'WAITING_LANJUT_SESI');
   } else {
-    // Pace hari ini sudah tercapai/lampaui -> kasih tahu dengan jelas, jangan diam-diam IDLE
     let pesan = await groqAI.generateSudahCapaiPace(nama, user.target_juz_per_hari);
     if (!pesan) {
       pesan = `Alhamdulillah, ${nama} sudah mencapai target hari ini (1 juz per ${user.target_juz_per_hari} hari) 🤍 Sampai jumpa di waktu sholat berikutnya ya!`;
@@ -583,8 +607,6 @@ async function cekKecepatanDanTawarkanLanjut(jid) {
   }
 }
 
-// Penutup singkat untuk pace normal (target 6 hari) atau kondisi data belum lengkap,
-// supaya user tetap tahu sesi membacanya sudah selesai, bukan diam tanpa kabar.
 async function tutupSesiBaca(jid, nama) {
   let pesan = await groqAI.generatePenutupSesiBiasa(nama);
   if (!pesan) {
@@ -593,7 +615,6 @@ async function tutupSesiBaca(jid, nama) {
   await sock.sendMessage(jid, { text: pesan });
 }
 
-// Selisih hari kalender (dibulatkan ke bawah), dipakai untuk hariBerjalan di §4.3
 function hitungSelisihHari(tanggalMulaiISO, tanggalSekarang) {
   const mulai = new Date(tanggalMulaiISO);
   const sekarang = new Date(
@@ -673,7 +694,7 @@ function setupSilentUserChecker() {
   console.log(`🕒 Silent user checker diset, jalan tiap 3 jam (ambang ${AMBANG_SILENT_JAM} jam diam).`);
 }
 
-// ========== FUNGSI-FUNGSI TRIGGER REMINDER ==========
+// ========== FUNGSI-FUNGSI TRIGGER REMINDER PERSONAL ==========
 
 async function kirimReminderSholat(waktuSholat, jid) {
   if (!PESAN_REMINDER_SHOLAT[waktuSholat]) {
@@ -701,7 +722,6 @@ async function kirimTawaranNgaji(jid) {
   const user = getUser(jid);
   const nama = getUserName(jid) || 'Sahabat Dawam';
 
-  // §6.2a: tawarkan mode halangan hanya SEKALI, ke user gender P, saat tawaran pertama kali
   const belumPernahDitawarkanMode = user.gender === 'P' && !user.waktu_tawaran_terakhir;
 
   let pesan;
@@ -721,7 +741,98 @@ async function kirimTawaranNgaji(jid) {
   console.log(`✅ Tawaran ngaji terkirim ke ${jid}, menunggu balasan...`);
 }
 
-// ========== SCHEDULER OTOMATIS (existing, tidak berubah) ==========
+// ========== GRUP: MURNI RUANG SOSIAL (phase 3) ==========
+// Bacaan TIDAK PERNAH dikirim ke grup. Grup cuma tempat lapor progress,
+// saling menyemangati, dan ngobrol soal tilawah. Bot silent di grup kecuali
+// di-tag/mention/reply, atau sedang dalam flow setup yang aktif.
+
+async function handleIncomingGroupMessage(groupJid, senderJid, text, message) {
+  const group = getGroup(groupJid);
+  const ditag = apakahBotDitag(message);
+
+  // Keyword aktivasi grup -- siapa saja di grup bisa trigger setup
+  if (text === KEYWORD_AKTIVASI && (!group || group.is_aktif === 0)) {
+    aktifkanGroup(groupJid);
+    tambahAnggotaGroup(groupJid, senderJid);
+
+    let pesan = await groqAI.generatePerkenalanGroupSosial();
+    if (!pesan) pesan = PESAN_GROUP_SETUP_FALLBACK;
+    await sock.sendMessage(groupJid, { text: pesan });
+    console.log(`✅ Grup ${groupJid} aktif sebagai ruang sosial.`);
+    return;
+  }
+
+  if (!group || group.is_aktif === 0) {
+    // Grup belum aktif dan bukan keyword aktivasi -> selalu silent.
+    return;
+  }
+
+  if (!ditag) {
+    // Grup sudah aktif tapi bot tidak di-tag -> tetap silent, sesuai requirement
+    // "jangan muncul terus, cuma pas di-tag". Tidak ada state grup yang menunggu
+    // jawaban spesifik tanpa tag, karena grup tidak punya flow kirim-bacaan/tawaran.
+    return;
+  }
+
+  tambahAnggotaGroup(groupJid, senderJid);
+  await routeGroupMessage(groupJid, senderJid, text);
+}
+
+async function routeGroupMessage(groupJid, senderJid, text) {
+  const namaSender = getUserName(senderJid) || null;
+
+  const intentGroup = await groqAI.classifyIntentBebas(text);
+  console.log(`(Intent grup: ${intentGroup})`);
+
+  if (intentGroup === 'TANYA_PROGRESS') {
+    const rekap = getRekapProgressGroup(groupJid);
+    const jawaban = await groqAI.generateRekapProgressGroup(text, rekap);
+    if (jawaban) await sock.sendMessage(groupJid, { text: jawaban });
+    catatAktivitasGroup(groupJid, senderJid, 'TANYA_PROGRESS');
+    return;
+  }
+
+  // Default: perlakukan sebagai laporan progress / curhat / ngobrol -> respon sosial hangat.
+  // Ini sengaja tidak terlalu ketat klasifikasinya karena tujuannya grup "ngobrol natural",
+  // bukan command-driven seperti personal chat.
+  const pesan = await groqAI.generateResponLaporanProgres(namaSender || 'Sahabat', text);
+  if (pesan) {
+    await sock.sendMessage(groupJid, { text: pesan });
+    catatAktivitasGroup(groupJid, senderJid, 'LAPOR_PROGRESS', text.slice(0, 200));
+  }
+}
+
+// ---- Broadcast ajakan ngobrol ringan ke grup aktif, berkala (BUKAN kirim bacaan) ----
+let groupMotivasiSchedulerSudahDiset = false;
+
+function setupGroupMotivasiScheduler() {
+  if (groupMotivasiSchedulerSudahDiset) return;
+  groupMotivasiSchedulerSudahDiset = true;
+
+  cron.schedule(INTERVAL_CRON_MOTIVASI_GROUP, async () => {
+    console.log('\n💬 Mengirim ajakan ngobrol mingguan ke grup aktif...');
+    const grupAktif = getAllGroupsAktif();
+
+    if (grupAktif.length === 0) {
+      console.log('(Tidak ada grup aktif saat ini)');
+      return;
+    }
+
+    for (const g of grupAktif) {
+      let pesan = await groqAI.generateAjakanObrolGroup();
+      if (!pesan) {
+        pesan = 'Assalamu\'alaikum, Sahabat sekalian 🌙 Gimana progress tilawah minggu ini? Yuk cerita-cerita di sini, saling menyemangati 😊';
+      }
+      await sock.sendMessage(g.jid, { text: pesan });
+      setGroupWaktuMotivasiTerakhir(g.jid, new Date().toISOString());
+      console.log(`✅ Ajakan ngobrol terkirim ke grup ${g.jid}`);
+    }
+  });
+
+  console.log(`🕒 Group motivasi scheduler diset (${INTERVAL_CRON_MOTIVASI_GROUP}).`);
+}
+
+// ========== SCHEDULER OTOMATIS PERSONAL (existing, tidak berubah) ==========
 
 let schedulerSudahDiset = false;
 

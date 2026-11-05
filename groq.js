@@ -490,6 +490,80 @@ Balas HANYA isi pesannya, tanpa tanda kutip.`;
   return await callGroqText(prompt, 300);
 }
 
+// ========== FUNGSI BARU PHASE 3: FITUR SOSIAL GRUP ==========
+// Grup Dawam murni ruang sosial: lapor progress, saling semangatin, ngobrol.
+// Bacaan (gambar Arab/terjemah) TIDAK PERNAH dikirim lewat fungsi-fungsi ini --
+// itu tetap jalur personal yang sudah ada (kirimBacaanArab di bot.js).
+
+/**
+ * Respon hangat saat seseorang di grup cerita/lapor progress tilawahnya
+ * (misal "td abis baca an-nisa", "alhamdulillah udah juz 3").
+ * Nada menyemangati, publik-friendly (bukan terlalu personal/privat), boleh ajak yang lain.
+ */
+async function generateResponLaporanProgres(namaUser, pesanUser) {
+  const prompt = `${namaUser} baru saja cerita di grup WhatsApp soal progress tilawahnya:
+
+"${pesanUser}"
+
+Buatkan SATU balasan singkat (2-3 kalimat) yang hangat, menyemangati, SEBUTKAN namanya, dan boleh sedikit mengapresiasi di depan grup (karena ini ruang sosial, bukan chat pribadi).
+Boleh sesekali ajak anggota grup lain buat ikut semangat juga, tapi tidak wajib tiap pesan.
+Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
+
+  return await callGroqText(prompt, 300);
+}
+
+/**
+ * Ajakan ngobrol ringan ke grup soal progress tilawah minggu ini -- BUKAN kirim bacaan,
+ * cuma pancingan obrolan santai. Dipakai broadcast berkala (misal tiap beberapa hari).
+ */
+async function generateAjakanObrolGroup() {
+  const prompt = `Buatkan SATU pesan singkat (2-4 kalimat) untuk disiarkan ke sebuah grup WhatsApp tilawah Al-Qur'an, isinya ajakan santai buat anggota grup cerita progress tilawah mereka minggu ini -- gimana rasanya, ada kendala apa, atau sekadar lapor udah sampai mana.
+Nada hangat, kayak teman nanya kabar, BUKAN kayak laporan wajib/formal. Boleh selipkan sedikit motivasi dari hadits/ayat pendek, tidak wajib.
+Jangan minta mereka balas dengan format tertentu, biarkan natural.
+Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
+
+  return await callGroqText(prompt, 350);
+}
+
+/**
+ * Jawaban atas pertanyaan bebas soal progress GRUP (rekap semua anggota), dipakai saat
+ * seseorang tag bot dan nanya semacam "progress kita gimana nih" / "siapa yang udah jalan".
+ * dataRekap: array hasil getRekapProgressGroup dari db.js.
+ */
+async function generateRekapProgressGroup(pesanUser, dataRekap) {
+  if (!dataRekap || dataRekap.length === 0) {
+    return 'Hmm, belum ada anggota grup yang tercatat progress-nya nih 🙏 Yuk mulai tilawah dan cerita progressnya di sini!';
+  }
+
+  const ringkasanData = dataRekap
+    .map((d) => `- ${d.nama}: ${d.posisi_terakhir}${d.juz_sekarang ? ` (juz ${d.juz_sekarang})` : ''}, target ${d.target_hari_per_juz} hari/juz`)
+    .join('\n');
+
+  const prompt = `Seseorang di grup bertanya: "${pesanUser}"
+
+Ini data progress tilawah anggota grup saat ini:
+${ringkasanData}
+
+Buatkan SATU balasan (3-5 kalimat atau list singkat kalau anggotanya banyak) yang merangkum progress grup dengan hangat dan menyemangati, berdasarkan data di atas SAJA -- JANGAN mengarang nama atau progress yang tidak ada di data.
+Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
+
+  return await callGroqText(prompt, 400);
+}
+
+/**
+ * Respon setup awal grup: dipakai sekali saat grup pertama kali aktivasi via keyword "dawam".
+ * Perkenalan singkat bahwa Dawam di grup ini fungsinya beda dari personal (sosial, bukan kirim bacaan).
+ */
+async function generatePerkenalanGroupSosial() {
+  const prompt = `Buatkan SATU pesan perkenalan (4-6 kalimat) untuk sebuah grup WhatsApp yang BARU SAJA mengaktifkan bot "Dawam" di dalamnya.
+Jelaskan dengan nada hangat dan santai bahwa di dalam GRUP, Dawam berperan sebagai teman buat saling cerita progress tilawah, menyemangati, dan ngobrol -- BUKAN tempat menerima bacaan Al-Qur'an (karena bacaan tetap dikirim personal lewat chat pribadi masing-masing, supaya tidak spam grup).
+Jelaskan juga kalau mau ngobrol/nanya ke Dawam di grup, cukup tag/mention Dawam atau reply pesannya, biar tidak mengganggu obrolan grup yang lain.
+Pesan ini BOLEH diawali salam karena ini pesan pembuka baru.
+Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
+
+  return await callGroqText(prompt, 400);
+}
+
 // ========== HELPER: PANGGIL GROQ (existing, tidak berubah) ==========
 
 async function callGroqText(userPrompt, maxTokens = 350, extraOptions = {}) {
@@ -546,4 +620,10 @@ module.exports = {
   classifyIntentBebas,
   extractDataOnboarding,
   generateLanjutanOnboarding,
+
+  // phase 3 - sosial grup
+  generateResponLaporanProgres,
+  generateAjakanObrolGroup,
+  generateRekapProgressGroup,
+  generatePerkenalanGroupSosial,
 };
