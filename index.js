@@ -67,7 +67,8 @@ const JADWAL_SHOLAT = {
   isya: { jam: 18, menit: 55 },
 };
 
-let BOT_JID_NORMALIZED = null; // diisi setelah sock connect, dipakai deteksi mention/reply
+let BOT_PN_NORMALIZED = null;  // nomor HP bot (format lama, @s.whatsapp.net)
+let BOT_LID_NORMALIZED = null; // LID bot (format baru, @lid) -- dipakai di mentionedJid grup
 
 function getRegisteredTargets() {
   return getAllUsers()
@@ -157,9 +158,9 @@ async function startBot() {
       if (shouldReconnect) startBot();
     } else if (connection === 'open') {
       console.log('\n✅ Berhasil terkoneksi ke WhatsApp!\n');
-      BOT_JID_NORMALIZED = sock.user?.id?.split(':')[0] || null;
-      console.log(`🤖 BOT_JID_NORMALIZED diset ke: "${BOT_JID_NORMALIZED}"`);
-      console.log(`🤖 sock.user lengkap:`, JSON.stringify(sock.user));
+      BOT_PN_NORMALIZED = sock.user?.id?.split(':')[0]?.split('@')[0] || null;
+      BOT_LID_NORMALIZED = sock.user?.lid?.split(':')[0]?.split('@')[0] || null;
+      console.log(`🤖 BOT_PN_NORMALIZED: "${BOT_PN_NORMALIZED}", BOT_LID_NORMALIZED: "${BOT_LID_NORMALIZED}"`);
       setupScheduler();
       setupSilentUserChecker();
       setupGroupMotivasiScheduler();
@@ -213,18 +214,24 @@ function normalizeJid(message) {
 // Cek apakah bot di-mention langsung di pesan grup, atau pesan ini reply ke pesan bot.
 function apakahBotDitag(message) {
   const contextInfo = message.message?.extendedTextMessage?.contextInfo;
-  if (!contextInfo || !BOT_JID_NORMALIZED) {
-    console.log(`(apakahBotDitag: contextInfo=${!!contextInfo}, BOT_JID_NORMALIZED=${BOT_JID_NORMALIZED})`);
-    return false;
-  }
+  if (!contextInfo) return false;
 
   const mentionedJids = contextInfo.mentionedJid || [];
-  console.log(`(Cek tag -- BOT_JID_NORMALIZED: "${BOT_JID_NORMALIZED}", mentionedJids: ${JSON.stringify(mentionedJids)}, replyParticipant: "${contextInfo.participant}")`);
+  const replyParticipant = contextInfo.participant || null;
 
-  const diMention = mentionedJids.some((j) => j.startsWith(BOT_JID_NORMALIZED));
-  const diReplyKeBot = contextInfo.participant && contextInfo.participant.startsWith(BOT_JID_NORMALIZED);
+  const cocokDenganBot = (jid) => {
+    if (!jid) return false;
+    const idBersih = jid.split('@')[0].split(':')[0];
+    return (
+      (BOT_PN_NORMALIZED && idBersih === BOT_PN_NORMALIZED) ||
+      (BOT_LID_NORMALIZED && idBersih === BOT_LID_NORMALIZED)
+    );
+  };
 
-  return diMention || !!diReplyKeBot;
+  const diMention = mentionedJids.some(cocokDenganBot);
+  const diReplyKeBot = cocokDenganBot(replyParticipant);
+
+  return diMention || diReplyKeBot;
 }
 
 // Helper: kirim pesan dengan jeda kecil opsional sebelumnya.
