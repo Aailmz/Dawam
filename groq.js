@@ -408,7 +408,7 @@ Jika dia bilang "dari awal"/"Al-Fatihah"/tidak menyebutkan surat spesifik/jawaba
         { role: 'system', content: systemPromptJson },
         { role: 'user', content: userPrompt },
       ],
-      max_tokens: 150,
+      max_tokens: 400,
       temperature: 0.2,
     });
 
@@ -487,11 +487,14 @@ Field yang TIDAK disebutkan di pesan ini -> null. Balas JSON:
         { role: 'system', content: systemPromptJson },
         { role: 'user', content: userPrompt },
       ],
-      max_tokens: 250,
+      max_tokens: 600,
       temperature: 0.2,
     });
     const result = completion.choices[0]?.message?.content?.trim();
-    if (!result) return {};
+    if (!result) {
+      console.log(`⚠️  extractDataOnboarding balas kosong. finish_reason: ${completion.choices[0]?.finish_reason}`);
+      return {};
+    }
     const cleaned = result.replace(/```json|```/g, '').trim();
     return JSON.parse(cleaned);
   } catch (err) {
@@ -617,7 +620,7 @@ async function callGroqText(userPrompt, maxTokens = 350, extraOptions = {}) {
     // kemungkinan reasoning model yang menghitung reasoning tokens ke dalam max_tokens,
     // jadi walau field reasoning_effort tidak diset, token tetap bisa habis duluan
     // sebelum nulis jawaban final kalau maxTokens kekecilan.
-    const amanMinimal = Math.max(maxTokens, 400);
+    const amanMinimal = Math.max(maxTokens, 800);
 
     const completion = await groq.chat.completions.create({
       model: MODEL,
