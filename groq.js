@@ -28,6 +28,31 @@ ATURAN PENULISAN WAJIB (PELANGGARAN = FATAL):
 - Jangan menyisipkan isi dari pesan lain atau instruksi lain yang tidak diminta. Hasilkan HANYA pesan sesuai permintaan spesifik di prompt user, tidak lebih.
 - Selesaikan kalimat dengan lengkap, jangan terpotong di tengah.`;
 
+
+// ========== KNOWLEDGE BASE TETAP SOAL DAWAM (dipakai di generateJawabanTentangDawam) ==========
+// Fakta-fakta ini TIDAK BOLEH dikarang ulang / diubah-ubah tiap kali dijawab AI.
+
+const FAKTA_TENTANG_DAWAM = `
+FITUR DAWAM:
+- Reminder sholat 5 waktu (Subuh, Dzuhur, Ashar, Maghrib, Isya), dikirim personal ke chat pribadi masing-masing.
+- Dampingan tilawah Al-Qur'an harian, dikirim personal setelah reminder sholat (bukan di grup).
+- Tracking progress bacaan (posisi surat/ayat, juz, target khatam).
+- Mode terjemah-saja: khusus untuk halangan (haid), bacaan dikirim terjemahnya saja tanpa gambar Arab.
+- Fitur sosial grup: tempat lapor progress dan saling menyemangati antar anggota. Grup BUKAN tempat menerima bacaan Al-Qur'an -- bacaan selalu dikirim personal ke masing-masing orang, supaya tidak spam grup.
+
+CARA AKTIVASI PERSONAL:
+- Kirim kata "dawam" ke chat personal/pribadi bot.
+
+CARA AKTIVASI GRUP:
+- Invite/tambahkan bot ke grup WhatsApp (TIDAK perlu dijadikan admin grup).
+- Setelah itu, siapa saja di grup kirim kata "dawam" di grup tersebut untuk mengaktifkan.
+
+PERILAKU DI GRUP:
+- Setelah aktif, Dawam di grup bersifat silent secara default.
+- Dawam hanya merespon di grup kalau di-tag/mention langsung, atau pesannya di-reply (reply ke pesan Dawam).
+`.trim();
+
+
 // ========== GENERATE PESAN DINAMIS (existing, tidak berubah) ==========
 
 async function generateReminderSholat(namaWaktu, namaUser) {
@@ -87,6 +112,21 @@ Balas HANYA pesan di atas secara natural dan hangat sesuai karaktermu, sebagai b
 Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
   return await callGroqText(prompt, 300);
+}
+
+async function generateJawabanTentangDawam(namaUser, pesanUser) {
+  const prompt = `${namaUser ? namaUser : 'Seseorang'} bertanya tentang Dawam (kamu sendiri) lewat WhatsApp:
+
+"${pesanUser}"
+
+Berikut fakta-fakta TETAP soal Dawam yang WAJIB kamu pakai apa adanya untuk menjawab -- JANGAN mengarang, mengubah, atau menambahkan detail yang tidak ada di fakta ini:
+
+${FAKTA_TENTANG_DAWAM}
+
+Jawab pertanyaan user HANYA berdasarkan fakta di atas, dengan gaya bahasamu yang natural dan hangat (tidak perlu menyalin persis kalimatnya, boleh diparafrase). Kalau pertanyaannya menyangkut hal yang TIDAK ada di fakta di atas, jawab jujur bahwa kamu belum tahu/belum ada infonya, JANGAN mengarang jawaban.
+Balas HANYA dengan isi pesannya saja, tanpa tanda kutip, tanpa penjelasan tambahan.`;
+
+  return await callGroqText(prompt, 400);
 }
 
 // ========== FUNGSI BARU PHASE 2: GENERATE PESAN ==========
@@ -272,13 +312,15 @@ async function classifyIntentBebas(pesanUser) {
 
 - TANYA_PROGRESS (nanya posisi bacaan, udah sampe mana, udah berapa juz, target gimana)
 - MINTA_LANJUT (minta dikirimkan bacaan lagi / lanjut baca sekarang)
+- TANYA_TENTANG_DAWAM (nanya soal Dawam itu sendiri: fitur-fiturnya, cara kerja, cara aktivasi personal/grup, siapa/apa itu Dawam, dll -- BUKAN soal progress bacaan pribadi user)
 - LAINNYA (semua yang lain -- jawaban flow aktif, curhat, sapaan, dll)
 
-Balas HANYA satu kata: TANYA_PROGRESS, MINTA_LANJUT, atau LAINNYA.`;
+Balas HANYA satu kata: TANYA_PROGRESS, MINTA_LANJUT, TANYA_TENTANG_DAWAM, atau LAINNYA.`;
 
   const hasil = await callGroqText(prompt, 50, { temperature: 0.1 });
   if (!hasil) return 'LAINNYA';
   const cleaned = hasil.trim().toUpperCase();
+  if (cleaned.includes('TANYA_TENTANG_DAWAM')) return 'TANYA_TENTANG_DAWAM';
   if (cleaned.includes('TANYA_PROGRESS')) return 'TANYA_PROGRESS';
   if (cleaned.includes('MINTA_LANJUT')) return 'MINTA_LANJUT';
   return 'LAINNYA';
@@ -568,13 +610,18 @@ Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
 async function callGroqText(userPrompt, maxTokens = 350, extraOptions = {}) {
   try {
+    // Pastikan max_tokens tidak terlalu kecil kalau reasoning_effort aktif --
+    // reasoning memakan token duluan sebelum jawaban final ditulis, jadi
+    // kalau maxTokens kecil, bisa kepotong jadi balasan kosong.
+    const amanMinimal = extraOptions.reasoning_effort ? Math.max(maxTokens, 300) : maxTokens;
+
     const completion = await groq.chat.completions.create({
       model: MODEL,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
       ],
-      max_tokens: maxTokens,
+      max_tokens: amanMinimal,
       temperature: 0.8,
       ...extraOptions,
     });
@@ -598,6 +645,7 @@ module.exports = {
   generateResponYa,
   generateResponTidak,
   generateFallbackChat,
+  generateJawabanTentangDawam,
   parseIntentJawaban,
 
   // phase 2 - generate
