@@ -113,6 +113,7 @@ tambahKolomJikaBelumAda('users', 'waktu_tawaran_terakhir', 'TEXT');
 // Grup sosial yang jadi "rumah" user ini buat lapor progress (opsional, boleh null).
 // Satu user hanya terhubung ke satu grup sosial primary untuk kesederhanaan prototype.
 tambahKolomJikaBelumAda('users', 'group_sosial_jid', 'TEXT');
+tambahKolomJikaBelumAda('users', 'sudah_lapor_sesi_ini', 'INTEGER DEFAULT 0');
 
 // ========== BACAAN ==========
 
@@ -252,6 +253,20 @@ function setWaktuTawaranTerakhir(jid, tanggalISO) {
 function setGroupSosialUser(jid, groupJid) {
   getOrCreateUser(jid);
   db.prepare('UPDATE users SET group_sosial_jid = ? WHERE jid = ?').run(groupJid, jid);
+}
+
+function setSudahLaporSesiIni(jid, sudah) {
+  getOrCreateUser(jid);
+  db.prepare('UPDATE users SET sudah_lapor_sesi_ini = ? WHERE jid = ?').run(sudah ? 1 : 0, jid);
+}
+
+// Set grup sosial HANYA kalau user belum punya grup sosial sama sekali (auto-link pertama kali).
+// Return true kalau berhasil di-set, false kalau sudah ada grup sosial sebelumnya (tidak ditimpa).
+function setGroupSosialJikaBelumAda(jid, groupJid) {
+  const user = getOrCreateUser(jid);
+  if (user.group_sosial_jid) return false;
+  db.prepare('UPDATE users SET group_sosial_jid = ? WHERE jid = ?').run(groupJid, jid);
+  return true;
 }
 
 // ========== ONBOARDING CONVERSATIONAL (phase 2) ==========
@@ -424,6 +439,8 @@ module.exports = {
   setModeArabSaja,
   setWaktuTawaranTerakhir,
   setGroupSosialUser,
+  setSudahLaporSesiIni,
+  setGroupSosialJikaBelumAda,
 
   // onboarding conversational
   FIELD_ONBOARDING_WAJIB,
