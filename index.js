@@ -51,7 +51,8 @@ const {
   // chat history (untuk agent)
   simpanChatHistory,
   getChatHistory,
-  setSudahLaporSesiIni 
+  setSudahLaporSesiIni,
+  setGroupSosialJikaBelumAda,
 } = require('./db');
 const groqAI = require('./groq');
 const {
