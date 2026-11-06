@@ -67,6 +67,21 @@ db.exec(`
   )
 `);
 
+// Histori chat untuk agent. Satu tabel untuk personal DAN grup:
+// - personal: chat_jid = jid user
+// - grup: chat_jid = jid grup, sender_jid = siapa yang bicara
+db.exec(`
+  CREATE TABLE IF NOT EXISTS chat_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_jid TEXT NOT NULL,
+    sender_jid TEXT,
+    role TEXT NOT NULL,        -- 'user' | 'assistant'
+    content TEXT NOT NULL,
+    waktu TEXT DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_history_chat ON chat_history (chat_jid, id)`);
+
 // Migrasi: tabel 'ayat' (generic image, Phase 1) sudah digantikan tabel 'bacaan'.
 const tabelLamaMasihAda = db
   .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='ayat'`)
@@ -349,6 +364,33 @@ function getRekapProgressGroup(groupJid) {
   });
 }
 
+// ========== CHAT HISTORY (untuk agent) ==========
+
+const BATAS_SIMPAN_HISTORI_PER_CHAT = 200; // pruning, biar tabel tidak membengkak
+
+function simpanChatHistory(chatJid, role, content, senderJid = null) {
+  if (!content || !content.trim()) return;
+  db.prepare(
+    'INSERT INTO chat_history (chat_jid, sender_jid, role, content) VALUES (?, ?, ?, ?)'
+  ).run(chatJid, senderJid, role, content);
+
+  // Pruning: buang yang lama kalau sudah lewat batas
+  db.prepare(`
+    DELETE FROM chat_history
+    WHERE chat_jid = ? AND id NOT IN (
+      SELECT id FROM chat_history WHERE chat_jid = ? ORDER BY id DESC LIMIT ?
+    )
+  `).run(chatJid, chatJid, BATAS_SIMPAN_HISTORI_PER_CHAT);
+}
+
+// Return array {role, content} urut dari LAMA ke BARU, siap dimasukkan ke messages agent.
+function getChatHistory(chatJid, limit = 12) {
+  const rows = db
+    .prepare('SELECT role, content FROM chat_history WHERE chat_jid = ? ORDER BY id DESC LIMIT ?')
+    .all(chatJid, limit);
+  return rows.reverse();
+}
+
 module.exports = {
   db,
 
@@ -402,4 +444,8 @@ module.exports = {
   getAnggotaGroup,
   catatAktivitasGroup,
   getRekapProgressGroup,
+
+  // chat history (untuk agent)
+  simpanChatHistory,
+  getChatHistory,
 };
