@@ -542,16 +542,20 @@ Balas HANYA isi pesannya, tanpa tanda kutip.`;
  * (misal "td abis baca an-nisa", "alhamdulillah udah juz 3").
  * Nada menyemangati, publik-friendly (bukan terlalu personal/privat), boleh ajak yang lain.
  */
-async function generateResponLaporanProgres(namaUser, pesanUser) {
+async function generateResponLaporanProgres(namaUser, pesanUser, belumOnboardingPersonal = false) {
+  const instruksiOnboarding = belumOnboardingPersonal
+    ? `\n\nCatatan tambahan: ${namaUser} ini TAMPAKNYA belum terdaftar/onboarding di chat PRIBADI dengan Dawam (baru dikenal di grup ini). Selipkan SATU kalimat singkat di akhir balasanmu, dengan nada santai (bukan perintah/formal), mengajak dia kirim kata "dawam" di chat pribadi kalau mau ditemani tilawah harian secara personal juga. Jangan jadikan ini fokus utama balasan, tetap utamakan respon atas pesannya dulu.`
+    : '';
+
   const prompt = `${namaUser} baru saja cerita di grup WhatsApp soal progress tilawahnya:
 
 "${pesanUser}"
 
-Buatkan SATU balasan singkat (2-3 kalimat) yang hangat, menyemangati, SEBUTKAN namanya, dan boleh sedikit mengapresiasi di depan grup (karena ini ruang sosial, bukan chat pribadi).
-Boleh sesekali ajak anggota grup lain buat ikut semangat juga, tapi tidak wajib tiap pesan.
+Buatkan SATU balasan singkat (2-3 kalimat, atau 3-4 kalimat kalau ada catatan tambahan di bawah) yang hangat, menyemangati, SEBUTKAN namanya, dan boleh sedikit mengapresiasi di depan grup (karena ini ruang sosial, bukan chat pribadi).
+Boleh sesekali ajak anggota grup lain buat ikut semangat juga, tapi tidak wajib tiap pesan.${instruksiOnboarding}
 Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
-  return await callGroqText(prompt, 300);
+  return await callGroqText(prompt, 350);
 }
 
 /**

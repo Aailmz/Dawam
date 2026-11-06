@@ -265,6 +265,13 @@ async function handleIncomingMessage(jid, text) {
       return;
     }
 
+    if (intentBebas === 'TANYA_TENTANG_DAWAM') {
+      const nama = getUserName(jid) || 'Sahabat Dawam';
+      const jawaban = await groqAI.generateJawabanTentangDawam(nama, text);
+      if (jawaban) await sock.sendMessage(jid, { text: jawaban });
+      return;
+    }
+
     if (
       intentBebas === 'MINTA_LANJUT' &&
       state !== 'WAITING_CONFIRM' &&
@@ -746,36 +753,39 @@ async function kirimTawaranNgaji(jid) {
 // saling menyemangati, dan ngobrol soal tilawah. Bot silent di grup kecuali
 // di-tag/mention/reply, atau sedang dalam flow setup yang aktif.
 
-async function handleIncomingGroupMessage(groupJid, senderJid, text, message) {
-  const group = getGroup(groupJid);
-  const ditag = apakahBotDitag(message);
+async function routeGroupMessage(groupJid, senderJid, text) {
+  const namaSender = getUserName(senderJid) || null;
+  const senderBelumOnboarding = !isUserRegistered(senderJid);
 
-  // Keyword aktivasi grup -- siapa saja di grup bisa trigger setup
-  if (text === KEYWORD_AKTIVASI && (!group || group.is_aktif === 0)) {
-    aktifkanGroup(groupJid);
-    tambahAnggotaGroup(groupJid, senderJid);
+  const intentGroup = await groqAI.classifyIntentBebas(text);
+  console.log(`(Intent grup: ${intentGroup})`);
 
-    let pesan = await groqAI.generatePerkenalanGroupSosial();
-    if (!pesan) pesan = PESAN_GROUP_SETUP_FALLBACK;
+  if (intentGroup === 'TANYA_PROGRESS') {
+    const rekap = getRekapProgressGroup(groupJid);
+    const jawaban = await groqAI.generateRekapProgressGroup(text, rekap);
+    if (jawaban) await sock.sendMessage(groupJid, { text: jawaban });
+    catatAktivitasGroup(groupJid, senderJid, 'TANYA_PROGRESS');
+    return;
+  }
+
+  if (intentGroup === 'TANYA_TENTANG_DAWAM') {
+    const jawaban = await groqAI.generateJawabanTentangDawam(namaSender || 'Sahabat', text);
+    if (jawaban) await sock.sendMessage(groupJid, { text: jawaban });
+    catatAktivitasGroup(groupJid, senderJid, 'TANYA_PROGRESS', text.slice(0, 200));
+    return;
+  }
+
+  // Default: perlakukan sebagai laporan progress / curhat / ngobrol -> respon sosial hangat.
+  // Kalau sender belum onboarding personal, kasih tau AI supaya diselipkan ajakan natural.
+  const pesan = await groqAI.generateResponLaporanProgres(
+    namaSender || 'Sahabat',
+    text,
+    senderBelumOnboarding
+  );
+  if (pesan) {
     await sock.sendMessage(groupJid, { text: pesan });
-    console.log(`✅ Grup ${groupJid} aktif sebagai ruang sosial.`);
-    return;
+    catatAktivitasGroup(groupJid, senderJid, 'LAPOR_PROGRESS', text.slice(0, 200));
   }
-
-  if (!group || group.is_aktif === 0) {
-    // Grup belum aktif dan bukan keyword aktivasi -> selalu silent.
-    return;
-  }
-
-  if (!ditag) {
-    // Grup sudah aktif tapi bot tidak di-tag -> tetap silent, sesuai requirement
-    // "jangan muncul terus, cuma pas di-tag". Tidak ada state grup yang menunggu
-    // jawaban spesifik tanpa tag, karena grup tidak punya flow kirim-bacaan/tawaran.
-    return;
-  }
-
-  tambahAnggotaGroup(groupJid, senderJid);
-  await routeGroupMessage(groupJid, senderJid, text);
 }
 
 async function routeGroupMessage(groupJid, senderJid, text) {
@@ -789,6 +799,13 @@ async function routeGroupMessage(groupJid, senderJid, text) {
     const jawaban = await groqAI.generateRekapProgressGroup(text, rekap);
     if (jawaban) await sock.sendMessage(groupJid, { text: jawaban });
     catatAktivitasGroup(groupJid, senderJid, 'TANYA_PROGRESS');
+    return;
+  }
+
+  if (intentGroup === 'TANYA_TENTANG_DAWAM') {
+    const jawaban = await groqAI.generateJawabanTentangDawam(namaSender || 'Sahabat', text);
+    if (jawaban) await sock.sendMessage(groupJid, { text: jawaban });
+    catatAktivitasGroup(groupJid, senderJid, 'TANYA_PROGRESS', text.slice(0, 200));
     return;
   }
 
