@@ -94,6 +94,23 @@ const TOOLS_PERSONAL = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'broadcast_ke_grup_sosial',
+      description: 'Kirim pesan ke grup sosial user (setelah user mengkonfirmasi isi pesannya). JANGAN panggil sebelum user eksplisit setuju dengan isi pesan yang akan dikirim.',
+      parameters: {
+        type: 'object',
+        properties: {
+          isi_pesan: {
+            type: 'string',
+            description: 'Isi pesan yang akan dikirim ke grup, sudah disepakati dengan user.',
+          },
+        },
+        required: ['isi_pesan'],
+      },
+    },
+  },
 ];
 
 // ========== SCHEMA — GRUP ==========
@@ -105,6 +122,14 @@ const TOOLS_GRUP = [
     function: {
       name: 'get_rekap_progress_grup',
       description: 'Ambil rekap progress tilawah semua anggota grup ini. Panggil kalau ada yang tanya progress grup / siapa aja yang udah jalan.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'set_grup_sosial_ini',
+      description: 'Jadikan grup ini sebagai grup sosial resmi pengirim pesan (tempat lapor progress & broadcast). Panggil kalau user eksplisit minta menghubungkan/memindahkan dirinya ke grup ini.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -190,6 +215,27 @@ async function eksekusiSetPosisiBacaan({ nama_surat }, konteks) {
   };
 }
 
+async function eksekusiBroadcastKeGrupSosial({ isi_pesan }, konteks) {
+  const user = db.getUser(konteks.jid);
+  if (!user.group_sosial_jid) {
+    return {
+      sukses: false,
+      pesan: 'User belum terhubung ke grup sosial manapun. Beri tahu user untuk kirim pesan apa saja di grup yang mau dijadikan grup sosialnya, nanti otomatis terhubung.',
+    };
+  }
+
+  const namaPengirim = user.name || 'Seseorang';
+  const terkirim = await konteks.kirimKeGrup(user.group_sosial_jid, `${namaPengirim}: ${isi_pesan}`);
+
+  if (!terkirim) {
+    return { sukses: false, pesan: 'Gagal mengirim pesan ke grup.' };
+  }
+
+  db.catatAktivitasGroup(user.group_sosial_jid, konteks.jid, 'BROADCAST_PERSONAL', isi_pesan.slice(0, 200));
+
+  return { sukses: true, catatan_untuk_ai: 'Pesan berhasil dikirim ke grup sosial. Beri tahu user singkat bahwa sudah terkirim.' };
+}
+
 const EKSEKUTOR_PERSONAL = {
   get_progress_user: eksekusiGetProgressUser,
   kirim_bacaan_lanjutan: eksekusiKirimBacaanLanjutan,
@@ -199,6 +245,8 @@ const EKSEKUTOR_PERSONAL = {
   catat_user_belum_baca: eksekusiCatatUserBelumBaca,
   update_preferensi_user: eksekusiUpdatePreferensiUser,
   set_posisi_bacaan: eksekusiSetPosisiBacaan,
+  broadcast_ke_grup_sosial: eksekusiBroadcastKeGrupSosial,
+  set_grup_sosial_ini: eksekusiSetGrupSosialIni,
 };
 
 // ========== EKSEKUTOR — GRUP ==========
@@ -212,8 +260,22 @@ async function eksekusiGetRekapProgressGrup(_, konteks) {
   return { sukses: true, jumlah: rekap.length, daftar: rekap };
 }
 
+async function eksekusiSetGrupSosialIni(_, konteks) {
+  const berhasil = db.setGroupSosialJikaBelumAda(konteks.senderJid, konteks.groupJid);
+
+  if (!berhasil) {
+    return {
+      sukses: false,
+      pesan: 'User sudah terhubung ke grup sosial lain sebelumnya. Kalau mau pindah, perlu fitur ganti grup sosial (belum tersedia).',
+    };
+  }
+
+  return { sukses: true, catatan_untuk_ai: 'Grup ini berhasil dijadikan grup sosial user. Beri tahu singkat bahwa mulai sekarang progressnya akan di-report ke sini.' };
+}
+
 const EKSEKUTOR_GRUP = {
   get_rekap_progress_grup: eksekusiGetRekapProgressGrup,
+  set_grup_sosial_ini: eksekusiSetGrupSosialIni,
 };
 
 module.exports = {
