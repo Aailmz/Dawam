@@ -71,7 +71,7 @@ Di akhir pesan, minta dia membalas dengan kata-kata sederhana seperti "ya" atau 
 Variasikan gaya bahasanya tiap kali diminta, jangan selalu template yang sama.
 Balas HANYA dengan isi pesannya saja, tanpa tanda kutip, tanpa penjelasan tambahan.`;
 
-  return await callGroqText(prompt, 400, { reasoning_effort: 'low' });
+  return await callGroqText(prompt, 400);
 }
 
 /**
@@ -288,7 +288,7 @@ Klasifikasikan jawaban ini ke SALAH SATU dari tiga kategori berikut:
 
 Balas HANYA dengan satu kata: YA, TIDAK, atau TIDAK_JELAS. Tanpa penjelasan tambahan.`;
 
-  const hasil = await callGroqText(prompt, 100, { reasoning_effort: 'low' });
+  const hasil = await callGroqText(prompt, 100);
 
   if (!hasil) {
     console.log('⚠️  Groq gagal/kosong saat parsing intent, fallback ke keyword matching manual.');
@@ -353,7 +353,7 @@ Klasifikasikan ke SALAH SATU:
 
 Balas HANYA dengan satu kata: L, P, atau TIDAK_JELAS.`;
 
-  const hasil = await callGroqText(prompt, 50, { reasoning_effort: 'low' });
+  const hasil = await callGroqText(prompt, 50);
   if (!hasil) return 'TIDAK_JELAS';
 
   const cleaned = hasil.trim().toUpperCase();
@@ -374,7 +374,7 @@ async function parseTargetDariJawaban(pesanUser) {
 Klasifikasikan jawabannya ke SALAH SATU: 6, 3, 1, atau TIDAK_JELAS (kalau tidak bisa ditentukan angkanya).
 Balas HANYA dengan satu kata/angka itu saja.`;
 
-  const hasil = await callGroqText(prompt, 50, { reasoning_effort: 'low' });
+  const hasil = await callGroqText(prompt, 50);
   if (!hasil) return 'TIDAK_JELAS';
 
   const cleaned = hasil.trim();
@@ -410,7 +410,6 @@ Jika dia bilang "dari awal"/"Al-Fatihah"/tidak menyebutkan surat spesifik/jawaba
       ],
       max_tokens: 150,
       temperature: 0.2,
-      reasoning_effort: 'low',
     });
 
     const result = completion.choices[0]?.message?.content?.trim();
@@ -449,7 +448,7 @@ Kata "sudah selesai" atau "aku mau baca arab" SENDIRIAN TANPA konteks haid sebel
 
 Balas HANYA dengan satu kata: AKTIFKAN, NONAKTIFKAN, atau TIDAK_RELEVAN.`;
 
-  const hasil = await callGroqText(prompt, 50, { reasoning_effort: 'low' });
+  const hasil = await callGroqText(prompt, 50);
   if (!hasil) return 'TIDAK_RELEVAN';
 
   const cleaned = hasil.trim().toUpperCase();
@@ -614,10 +613,11 @@ Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
 async function callGroqText(userPrompt, maxTokens = 350, extraOptions = {}) {
   try {
-    // Pastikan max_tokens tidak terlalu kecil kalau reasoning_effort aktif --
-    // reasoning memakan token duluan sebelum jawaban final ditulis, jadi
-    // kalau maxTokens kecil, bisa kepotong jadi balasan kosong.
-    const amanMinimal = extraOptions.reasoning_effort ? Math.max(maxTokens, 300) : maxTokens;
+    // Naikkan max_tokens minimal secara UNCONDITIONAL -- model yang dipakai sekarang
+    // kemungkinan reasoning model yang menghitung reasoning tokens ke dalam max_tokens,
+    // jadi walau field reasoning_effort tidak diset, token tetap bisa habis duluan
+    // sebelum nulis jawaban final kalau maxTokens kekecilan.
+    const amanMinimal = Math.max(maxTokens, 400);
 
     const completion = await groq.chat.completions.create({
       model: MODEL,
@@ -632,7 +632,7 @@ async function callGroqText(userPrompt, maxTokens = 350, extraOptions = {}) {
 
     const result = completion.choices[0]?.message?.content?.trim();
     if (!result) {
-      console.log('⚠️  Groq balas kosong (kemungkinan token habis sebelum jawaban final).');
+      console.log(`⚠️  Groq balas kosong. finish_reason: ${completion.choices[0]?.finish_reason}, max_tokens dipakai: ${amanMinimal}`);
       return null;
     }
     return result;
