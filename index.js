@@ -158,6 +158,8 @@ async function startBot() {
     } else if (connection === 'open') {
       console.log('\n✅ Berhasil terkoneksi ke WhatsApp!\n');
       BOT_JID_NORMALIZED = sock.user?.id?.split(':')[0] || null;
+      console.log(`🤖 BOT_JID_NORMALIZED diset ke: "${BOT_JID_NORMALIZED}"`);
+      console.log(`🤖 sock.user lengkap:`, JSON.stringify(sock.user));
       setupScheduler();
       setupSilentUserChecker();
       setupGroupMotivasiScheduler();
@@ -211,9 +213,14 @@ function normalizeJid(message) {
 // Cek apakah bot di-mention langsung di pesan grup, atau pesan ini reply ke pesan bot.
 function apakahBotDitag(message) {
   const contextInfo = message.message?.extendedTextMessage?.contextInfo;
-  if (!contextInfo || !BOT_JID_NORMALIZED) return false;
+  if (!contextInfo || !BOT_JID_NORMALIZED) {
+    console.log(`(apakahBotDitag: contextInfo=${!!contextInfo}, BOT_JID_NORMALIZED=${BOT_JID_NORMALIZED})`);
+    return false;
+  }
 
   const mentionedJids = contextInfo.mentionedJid || [];
+  console.log(`(Cek tag -- BOT_JID_NORMALIZED: "${BOT_JID_NORMALIZED}", mentionedJids: ${JSON.stringify(mentionedJids)}, replyParticipant: "${contextInfo.participant}")`);
+
   const diMention = mentionedJids.some((j) => j.startsWith(BOT_JID_NORMALIZED));
   const diReplyKeBot = contextInfo.participant && contextInfo.participant.startsWith(BOT_JID_NORMALIZED);
 
