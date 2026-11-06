@@ -48,9 +48,19 @@ const {
   getAnggotaGroup,
   catatAktivitasGroup,
   getRekapProgressGroup,
+  // chat history (untuk agent)
+  simpanChatHistory,
+  getChatHistory,
 } = require('./db');
 const groqAI = require('./groq');
-const { buatToolExecutors } = require('./tools');
+const {
+  TOOLS_PERSONAL,
+  TOOLS_GRUP,
+  EKSEKUTOR_PERSONAL,
+  EKSEKUTOR_GRUP,
+} = require('./tools');
+const { jalankanAgentDawam } = require('./agent');
+const { buatPromptPersonal, buatPromptGrup } = require('./prompts');
 
 // ========== KONFIGURASI ==========
 
@@ -190,8 +200,13 @@ async function startBot() {
       await handleIncomingGroupMessage(remoteJid, sender, text, message);
     } else {
       const sender = normalizeJid(message);
-      console.log(`\n📩 Pesan masuk dari ${sender}: "${text}"`);
-      await handleIncomingMessage(sender, text);
+      const textAsli = (
+        message.message.conversation ||
+        message.message.extendedTextMessage?.text ||
+        ''
+      ).trim();
+      console.log(`\n📩 Pesan masuk dari ${sender}: "${textAsli}"`);
+      await handleIncomingMessage(sender, textAsli, text);
     }
   });
 
@@ -246,17 +261,17 @@ async function kirimPesan(jid, text, jedaMsSebelum = 0) {
 
 // ========== HANDLER PESAN PERSONAL ==========
 
-async function handleIncomingMessage(jid, text) {
+async function handleIncomingMessage(jid, textAsli, textLower) {
   // Cek dulu: apakah user belum terdaftar dan ngirim keyword aktivasi?
   if (!isUserRegistered(jid)) {
-    if (text === KEYWORD_AKTIVASI) {
+    if (textLower === KEYWORD_AKTIVASI) {
       registerUser(jid);
       setUserState(jid, 'ONBOARDING');
       await kirimPesan(jid, PESAN_SELAMAT_DATANG);
       await kirimPesan(jid, PESAN_PEMBUKA_ONBOARDING, 1500);
       console.log(`✅ User baru teraktivasi: ${jid}, mulai onboarding...`);
     } else {
-      console.log(`(User belum terdaftar, bukan keyword aktivasi, diabaikan: "${text}")`);
+      console.log(`(User belum terdaftar, bukan keyword aktivasi, diabaikan: "${textLower}")`);
     }
     return;
   }
@@ -264,92 +279,42 @@ async function handleIncomingMessage(jid, text) {
   const user = getUser(jid);
   const state = user.state;
 
-  // ---- Intent bebas: cek dulu apakah ini pertanyaan progress/lanjut, ----
-  // ---- terlepas dari state apapun yang sedang aktif (kecuali ONBOARDING) ----
-  const stateDikecualikanDariIntentBebas = ['ONBOARDING'];
-  if (!stateDikecualikanDariIntentBebas.includes(state) && text.length > 1) {
-    const intentBebas = await groqAI.classifyIntentBebas(text);
-    console.log(`(Intent bebas: ${intentBebas})`);
-
-    if (intentBebas === 'TANYA_PROGRESS') {
-      const nama = getUserName(jid) || 'Sahabat Dawam';
-      const executors = buatToolExecutors(jid);
-      const jawaban = await groqAI.generateJawabanProgress(nama, text, executors);
-      if (jawaban) await sock.sendMessage(jid, { text: jawaban });
-      return;
-    }
-
-    if (intentBebas === 'TANYA_TENTANG_DAWAM') {
-      const nama = getUserName(jid) || 'Sahabat Dawam';
-      const jawaban = await groqAI.generateJawabanTentangDawam(nama, text);
-      if (jawaban) await sock.sendMessage(jid, { text: jawaban });
-      return;
-    }
-
-    if (
-      intentBebas === 'MINTA_LANJUT' &&
-      state !== 'WAITING_CONFIRM' &&
-      state !== 'WAITING_LANJUT_SESI'
-    ) {
-      resetNoResponse(jid);
-      await kirimBacaanArab(jid);
-      return;
-    }
-  }
-
-  // ---- §6.3: Pengecekan intent mode halangan, SEBELUM state check biasa ----
-  const stateFlowAktif = [
-    'ONBOARDING',
-    'WAITING_CONFIRM',
-    'WAITING_CONFIRM_TERJEMAH',
-    'WAITING_LANJUT_SESI',
-    'WAITING_ALASAN_TIDAK_BACA',
-  ];
-  if (user.gender === 'P' && !stateFlowAktif.includes(state)) {
-    const intentHalangan = await groqAI.parseModeHalanganIntent(text);
-    console.log(`(Cek intent halangan: ${intentHalangan})`);
-
-    if (intentHalangan === 'AKTIFKAN' && user.mode_baca_arab_saja === 1) {
-      setModeArabSaja(jid, false);
-      let konfirmasi = await groqAI.generateKonfirmasiModeHalangan(getUserName(jid), true);
-      if (!konfirmasi) konfirmasi = 'Baik, mode terjemah-saja sudah aktif untukmu 🤍 Istirahat dulu ya, Sahabat.';
-      await sock.sendMessage(jid, { text: konfirmasi });
-      return;
-    }
-
-    if (intentHalangan === 'NONAKTIFKAN' && user.mode_baca_arab_saja === 0) {
-      setModeArabSaja(jid, true);
-      let konfirmasi = await groqAI.generateKonfirmasiModeHalangan(getUserName(jid), false);
-      if (!konfirmasi) konfirmasi = 'Alhamdulillah, mode normal sudah aktif lagi. Yuk lanjut tilawah seperti biasa 🤍';
-      await sock.sendMessage(jid, { text: konfirmasi });
-      return;
-    }
-  }
-
-  // ---- Flow state biasa ----
+  // ONBOARDING tetap state machine terpisah, tidak lewat agent.
   if (state === 'ONBOARDING') {
-    await handleOnboardingTurn(jid, text);
-  } else if (state === 'WAITING_CONFIRM') {
-    await handleJawabanTawaranNgaji(jid, text);
-  } else if (state === 'WAITING_CONFIRM_TERJEMAH') {
-    await handleJawabanTawaranTerjemah(jid, text);
-  } else if (state === 'WAITING_LANJUT_SESI') {
-    await handleJawabanLanjutSesi(jid, text);
-  } else if (state === 'WAITING_ALASAN_TIDAK_BACA') {
-    const nama = getUserName(jid) || 'Sahabat Dawam';
-    const pesan = await groqAI.generateFallbackChat(nama, text);
-    if (pesan) await sock.sendMessage(jid, { text: pesan });
-    setUserState(jid, 'IDLE');
-  } else {
-    const nama = getUserName(jid) || 'Sahabat Dawam';
-    console.log(`(Pesan di luar flow aktif, dibales via fallback chat)`);
-    const pesan = await groqAI.generateFallbackChat(nama, text);
-    if (pesan) {
-      await sock.sendMessage(jid, { text: pesan });
-    } else {
-      console.log('(AI gagal, tidak ada fallback template, pesan diabaikan)');
-    }
+    await handleOnboardingTurn(jid, textAsli);
+    return;
   }
+
+  if (!textAsli || textAsli.length < 2) {
+    console.log('(Pesan terlalu pendek/kosong, diabaikan)');
+    return;
+  }
+
+  simpanChatHistory(jid, 'user', textAsli);
+
+  const konteks = {
+    jid,
+    kirimBacaanLanjutan: () => kirimBacaanLanjutanUntukAgent(jid),
+    kirimTerjemahBacaan: () => kirimTerjemahBacaanUntukAgent(jid),
+  };
+
+  const hasil = await jalankanAgentDawam({
+    systemPrompt: buatPromptPersonal(user),
+    tools: TOOLS_PERSONAL,
+    historiChat: getChatHistory(jid, 12),
+    pesanBaru: textAsli,
+    eksekutorTools: EKSEKUTOR_PERSONAL,
+    konteks,
+  });
+
+  if (hasil.error || !hasil.jawabanFinal) {
+    console.log(`⚠️  Agent gagal/kosong untuk ${jid}: ${hasil.error}`);
+    await sock.sendMessage(jid, { text: PESAN_TIDAK_DIMENGERTI });
+    return;
+  }
+
+  await sock.sendMessage(jid, { text: hasil.jawabanFinal });
+  simpanChatHistory(jid, 'assistant', hasil.jawabanFinal);
 }
 
 // ---- Sub-handler: ONBOARDING conversational ----
@@ -579,6 +544,114 @@ async function kirimBacaanTerjemahSaja(jid) {
   await cekKecepatanDanTawarkanLanjut(jid);
 }
 
+// ========== FUNGSI UNTUK AGENT (dipanggil tools.js lewat konteks) ==========
+// Sengaja independen dari kirimBacaanArab/kirimBacaanTerjemahSaja di atas
+// (yang masih dipakai flow state lama) supaya tidak saling pengaruh selama migrasi bertahap.
+// Akan di-cleanup/di-dedup di Step 10 setelah flow lama resmi dibuang.
+
+async function kirimGambarBacaanMentah(jid, bacaan, jenis) {
+  const relPath = jenis === 'arab' ? bacaan.path_arab : bacaan.path_indo;
+  const caption = jenis === 'arab'
+    ? PESAN_SETELAH_YA_ARAB_TEMPLATE(bacaan.surat_ayat)
+    : PESAN_SETELAH_YA_TERJEMAH_TEMPLATE(bacaan.surat_ayat);
+  try {
+    await sock.sendMessage(jid, { image: { url: path.join(__dirname, relPath) }, caption });
+    return true;
+  } catch (err) {
+    console.error(`❌ Gagal kirim bacaan ${jenis} (agent):`, err.message);
+    return false;
+  }
+}
+
+function hitungStatusPaceUntukAgent(jid, bacaanTerakhir) {
+  const user = getUser(jid);
+  if (user.target_juz_per_hari === '6' || !user.target_juz_per_hari || !user.tanggal_mulai_baca) {
+    return 'NORMAL';
+  }
+  const hariTercapai = bacaanTerakhir.hari_global;
+  const hariBerjalan = hitungSelisihHari(user.tanggal_mulai_baca, new Date()) + 1;
+  let hariTarget;
+  if (user.target_juz_per_hari === '3') hariTarget = hariBerjalan * 2;
+  else if (user.target_juz_per_hari === '1') hariTarget = hariBerjalan * 6;
+  else return 'NORMAL';
+  return hariTercapai < hariTarget ? 'DI_BAWAH_PACE' : 'SUDAH_CAPAI_PACE';
+}
+
+function buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, target) {
+  const bagianMode = modeArabSaja
+    ? 'Bacaan Arab sudah terkirim. Tawarkan dengan natural apakah user mau lanjut baca terjemahnya juga (pakai tool kirim_terjemah_bacaan kalau user mau).'
+    : 'Bacaan terjemah-saja sudah terkirim (user sedang dalam mode halangan).';
+
+  let bagianPace = '';
+  if (statusPace === 'DI_BAWAH_PACE') {
+    bagianPace = ` User punya target cepat (1 juz per ${target} hari) dan progress hari ini masih di bawah pace. Setelah menanggapi soal bacaan, semangati dan tawarkan apakah mau lanjut baca kartu berikutnya sekarang juga.`;
+  } else if (statusPace === 'SUDAH_CAPAI_PACE') {
+    bagianPace = ` User sudah mencapai/melampaui target pace hari ini (1 juz per ${target} hari). Beri apresiasi dan beri tahu cukup untuk sesi ini, akan dilanjutkan di waktu sholat berikutnya.`;
+  }
+
+  return bagianMode + bagianPace;
+}
+
+async function kirimBacaanLanjutanUntukAgent(jid) {
+  const user = getUser(jid);
+  let nextId = user.last_sent_bacaan_id + 1;
+  if (nextId > 900) nextId = 1;
+
+  const bacaan = getBacaanById(nextId);
+  if (!bacaan) {
+    console.log(`⚠️  Bacaan id=${nextId} tidak ditemukan (agent).`);
+    return { sukses: false, pesan: 'Data bacaan belum tersedia saat ini.' };
+  }
+
+  const modeArabSaja = user.mode_baca_arab_saja === 1;
+  const jenisDikirim = modeArabSaja ? 'arab' : 'indo';
+  const terkirim = await kirimGambarBacaanMentah(jid, bacaan, jenisDikirim);
+  if (!terkirim) {
+    return { sukses: false, pesan: 'Gagal mengirim gambar bacaan.' };
+  }
+
+  if (!user.tanggal_mulai_baca) {
+    setTanggalMulaiBaca(jid, new Date().toISOString().slice(0, 10));
+  }
+  updateLastSentBacaanId(jid, nextId);
+  resetNoResponse(jid);
+
+  const statusPace = hitungStatusPaceUntukAgent(jid, bacaan);
+  console.log(`✅ [Agent] Bacaan ${jenisDikirim} terkirim ke ${jid}: ${bacaan.surat_ayat} (id=${nextId})`);
+
+  return {
+    sukses: true,
+    surat_ayat: bacaan.surat_ayat,
+    juz: bacaan.juz,
+    jenis_dikirim: jenisDikirim,
+    catatan_untuk_ai: buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari),
+  };
+}
+
+async function kirimTerjemahBacaanUntukAgent(jid) {
+  const user = getUser(jid);
+  const bacaan = getBacaanById(user.last_sent_bacaan_id);
+  if (!bacaan) {
+    return { sukses: false, pesan: 'Belum ada bacaan Arab yang terkirim sebelumnya untuk diterjemahkan.' };
+  }
+
+  const terkirim = await kirimGambarBacaanMentah(jid, bacaan, 'indo');
+  if (!terkirim) {
+    return { sukses: false, pesan: 'Gagal mengirim gambar terjemah.' };
+  }
+
+  const statusPace = hitungStatusPaceUntukAgent(jid, bacaan);
+  let catatan = 'Terjemah sudah terkirim.';
+  if (statusPace === 'DI_BAWAH_PACE') {
+    catatan += ` User masih di bawah pace target (1 juz per ${user.target_juz_per_hari} hari), tawarkan lanjut baca kartu berikutnya.`;
+  } else if (statusPace === 'SUDAH_CAPAI_PACE') {
+    catatan += ' User sudah capai pace hari ini, beri apresiasi dan cukupkan sesi.';
+  }
+
+  console.log(`✅ [Agent] Terjemah terkirim ke ${jid}: ${bacaan.surat_ayat}`);
+  return { sukses: true, surat_ayat: bacaan.surat_ayat, catatan_untuk_ai: catatan };
+}
+
 // ---- §4.3: Deteksi kecepatan & tawaran lanjut ----
 async function cekKecepatanDanTawarkanLanjut(jid) {
   const user = getUser(jid);
@@ -671,6 +744,7 @@ async function kirimPesanSetelah3xTidakBaca(jid) {
     pesan = `${nama}, Dawam notice kamu belum sempat tilawah beberapa kali terakhir 🤍 Ga apa-apa, boleh cerita lagi sibuk apa? Semangat terus ya, pelan-pelan juga gapapa.`;
   }
   await sock.sendMessage(jid, { text: pesan });
+  simpanChatHistory(jid, 'assistant', pesan);
 
   setUserState(jid, 'WAITING_ALASAN_TIDAK_BACA');
   resetNoResponse(jid);
@@ -733,6 +807,7 @@ async function kirimReminderSholat(waktuSholat, jid) {
   }
 
   await sock.sendMessage(jid, { text: pesan });
+  simpanChatHistory(jid, 'assistant', pesan);
   console.log(`✅ Reminder ${waktuSholat} terkirim ke ${jid}`);
 
   console.log(`⏳ Menjadwalkan tawaran ngaji dalam ${JEDA_TAWARAN_MS / 1000} detik...`);
@@ -757,6 +832,7 @@ async function kirimTawaranNgaji(jid) {
   }
 
   await sock.sendMessage(jid, { text: pesan });
+  simpanChatHistory(jid, 'assistant', pesan);
   setUserState(jid, 'WAITING_CONFIRM');
   setWaktuTawaranTerakhir(jid, new Date().toISOString());
   console.log(`✅ Tawaran ngaji terkirim ke ${jid}, menunggu balasan...`);
@@ -816,35 +892,33 @@ async function routeGroupMessage(groupJid, senderJid, text) {
   const namaSender = getUserName(senderJid) || null;
   const senderBelumOnboarding = !isUserRegistered(senderJid);
 
-  const intentGroup = await groqAI.classifyIntentBebas(text);
-  console.log(`(Intent grup: ${intentGroup})`);
-
-  if (intentGroup === 'TANYA_PROGRESS') {
-    const rekap = getRekapProgressGroup(groupJid);
-    const jawaban = await groqAI.generateRekapProgressGroup(text, rekap);
-    if (jawaban) await sock.sendMessage(groupJid, { text: jawaban });
-    catatAktivitasGroup(groupJid, senderJid, 'TANYA_PROGRESS');
+  if (!text || text.length < 2) {
+    console.log('(Pesan grup terlalu pendek/kosong, diabaikan)');
     return;
   }
 
-  if (intentGroup === 'TANYA_TENTANG_DAWAM') {
-    const jawaban = await groqAI.generateJawabanTentangDawam(namaSender || 'Sahabat', text);
-    if (jawaban) await sock.sendMessage(groupJid, { text: jawaban });
-    catatAktivitasGroup(groupJid, senderJid, 'TANYA_PROGRESS', text.slice(0, 200));
+  simpanChatHistory(groupJid, 'user', `${namaSender || 'Seseorang'}: ${text}`, senderJid);
+
+  const konteks = { groupJid };
+
+  const hasil = await jalankanAgentDawam({
+    systemPrompt: buatPromptGrup(namaSender, senderBelumOnboarding),
+    tools: TOOLS_GRUP,
+    historiChat: getChatHistory(groupJid, 15),
+    pesanBaru: text,
+    eksekutorTools: EKSEKUTOR_GRUP,
+    konteks,
+  });
+
+  if (hasil.error || !hasil.jawabanFinal) {
+    console.log(`⚠️  Agent grup gagal/kosong untuk ${groupJid}: ${hasil.error}`);
+    await sock.sendMessage(groupJid, { text: PESAN_TIDAK_DIMENGERTI });
     return;
   }
 
-  // Default: perlakukan sebagai laporan progress / curhat / ngobrol -> respon sosial hangat.
-  // Kalau sender belum onboarding personal, kasih tau AI supaya diselipkan ajakan natural.
-  const pesan = await groqAI.generateResponLaporanProgres(
-    namaSender || 'Sahabat',
-    text,
-    senderBelumOnboarding
-  );
-  if (pesan) {
-    await sock.sendMessage(groupJid, { text: pesan });
-    catatAktivitasGroup(groupJid, senderJid, 'LAPOR_PROGRESS', text.slice(0, 200));
-  }
+  await sock.sendMessage(groupJid, { text: hasil.jawabanFinal });
+  simpanChatHistory(groupJid, 'assistant', hasil.jawabanFinal);
+  catatAktivitasGroup(groupJid, senderJid, 'LAPOR_PROGRESS', text.slice(0, 200));
 }
 
 // ---- Broadcast ajakan ngobrol ringan ke grup aktif, berkala (BUKAN kirim bacaan) ----
