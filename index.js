@@ -51,6 +51,7 @@ const {
   // chat history (untuk agent)
   simpanChatHistory,
   getChatHistory,
+  setSudahLaporSesiIni 
 } = require('./db');
 const groqAI = require('./groq');
 const {
@@ -95,6 +96,18 @@ const PESAN_REMINDER_SHOLAT = {
   maghrib: 'Assalamu\'alaikum 🌆\nWaktu Maghrib telah tiba. Saatnya berhenti sejenak dan kembali mengingat-Nya.',
   isya: 'Assalamu\'alaikum 🌃\nWaktu Isya telah tiba. Tutup hari ini dengan shalat dan doa terbaik.',
 };
+
+const TEMPLATE_AUTO_REPORT = [
+  (nama, suratAyat) => `${nama} baru aja lanjut baca, sekarang nyampe ${suratAyat} 🤍`,
+  (nama, suratAyat) => `Gaskeun, ${nama} udah nyampe ${suratAyat} nih tilawahnya 📖`,
+  (nama, suratAyat) => `${nama} abis ngaji, posisi sekarang di ${suratAyat} ✨`,
+  (nama, suratAyat) => `Semangat terus, ${nama} baru aja baca sampe ${suratAyat} 🙌`,
+];
+
+function buatPesanAutoReport(nama, suratAyat) {
+  const pilih = TEMPLATE_AUTO_REPORT[Math.floor(Math.random() * TEMPLATE_AUTO_REPORT.length)];
+  return pilih(nama, suratAyat);
+}
 
 const PESAN_TAWARAN_NGAJI_TEMPLATE = (nama) =>
   `Semoga shalatnya diterima Allah ﷻ 🤲\n\n${nama}, sudah siap lanjut tilawah hari ini? Yuk sisihkan sedikit waktu untuk membaca Al-Qur'an 📖\n\nBalas *"ya"* untuk lanjut membaca, atau *"nanti"* kalau belum sempat.`;
@@ -296,6 +309,15 @@ async function handleIncomingMessage(jid, textAsli, textLower) {
     jid,
     kirimBacaanLanjutan: () => kirimBacaanLanjutanUntukAgent(jid),
     kirimTerjemahBacaan: () => kirimTerjemahBacaanUntukAgent(jid),
+    kirimKeGrup: async (targetGroupJid, text) => {
+      try {
+        await sock.sendMessage(targetGroupJid, { text });
+        return true;
+      } catch (err) {
+        console.error('❌ Gagal kirim ke grup (broadcast):', err.message);
+        return false;
+      }
+    },
   };
 
   const hasil = await jalankanAgentDawam({
@@ -619,6 +641,18 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
   const statusPace = hitungStatusPaceUntukAgent(jid, bacaan);
   console.log(`✅ [Agent] Bacaan ${jenisDikirim} terkirim ke ${jid}: ${bacaan.surat_ayat} (id=${nextId})`);
 
+  if (user.group_sosial_jid && user.sudah_lapor_sesi_ini === 0) {
+    const namaUser = user.name || 'Sahabat';
+    const pesanReport = buatPesanAutoReport(namaUser, bacaan.surat_ayat);
+    try {
+      await sock.sendMessage(user.group_sosial_jid, { text: pesanReport });
+      setSudahLaporSesiIni(jid, true);
+      console.log(`✅ [Auto-report] Terkirim ke grup ${user.group_sosial_jid} untuk ${jid}`);
+    } catch (err) {
+      console.error('❌ Gagal kirim auto-report ke grup:', err.message);
+    }
+  }
+
   return {
     sukses: true,
     surat_ayat: bacaan.surat_ayat,
@@ -834,6 +868,7 @@ async function kirimTawaranNgaji(jid) {
   await sock.sendMessage(jid, { text: pesan });
   simpanChatHistory(jid, 'assistant', pesan);
   setUserState(jid, 'WAITING_CONFIRM');
+  setSudahLaporSesiIni(jid, false);
   setWaktuTawaranTerakhir(jid, new Date().toISOString());
   console.log(`✅ Tawaran ngaji terkirim ke ${jid}, menunggu balasan...`);
 }
@@ -886,6 +921,7 @@ async function handleIncomingGroupMessage(groupJid, senderJid, text, message) {
   }
 
   tambahAnggotaGroup(groupJid, senderJid);
+  setGroupSosialJikaBelumAda(senderJid, groupJid);
   await routeGroupMessage(groupJid, senderJid, text);
 }
 async function routeGroupMessage(groupJid, senderJid, text) {
@@ -899,7 +935,19 @@ async function routeGroupMessage(groupJid, senderJid, text) {
 
   simpanChatHistory(groupJid, 'user', `${namaSender || 'Seseorang'}: ${text}`, senderJid);
 
-  const konteks = { groupJid };
+  const konteks = {
+    groupJid,
+    senderJid,
+    kirimKeGrup: async (targetGroupJid, text) => {
+      try {
+        await sock.sendMessage(targetGroupJid, { text });
+        return true;
+      } catch (err) {
+        console.error('❌ Gagal kirim ke grup (broadcast):', err.message);
+        return false;
+      }
+    },
+  };
 
   const hasil = await jalankanAgentDawam({
     systemPrompt: buatPromptGrup(namaSender, senderBelumOnboarding),
