@@ -638,7 +638,7 @@ Buatkan SATU pesan rekap harian (3-6 kalimat, atau list singkat kalau anggotanya
 ${belumAktif.length > 0 ? 'Di akhir, singgung SINGKAT (1 kalimat saja, jangan sebut nama satu-satu) bahwa ada anggota yang belum aktivasi personal dan ajak mereka kirim "dawam" ke chat pribadi kalau mau progressnya ikut tercatat -- nada santai, bukan menegur.' : ''}
 Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
-  return await callGroqText(prompt, 450);
+  return await callGroqText(prompt, 2450);
 }
 
 /**
