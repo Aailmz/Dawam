@@ -121,7 +121,15 @@ const TOOLS_GRUP = [
     type: 'function',
     function: {
       name: 'get_rekap_progress_grup',
-      description: 'Ambil rekap progress tilawah semua anggota grup ini. Panggil kalau ada yang tanya progress grup / siapa aja yang udah jalan.',
+      description: 'Ambil rekap progress tilawah semua anggota grup ini. Panggil kalau ada yang tanya progress grup / siapa aja yang udah jalan, dalam bentuk jawaban singkat natural.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'minta_rekap_harian',
+      description: 'Kirim pesan rekap harian progress grup (format yang sama dengan broadcast otomatis jam 8 malam) ke grup ini SEKARANG JUGA. Panggil kalau ada yang eksplisit minta "kirim rekap harian", "kayak laporan harian dong", atau semacamnya -- beda dari get_rekap_progress_grup yang untuk pertanyaan spontan biasa.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -263,6 +271,22 @@ async function eksekusiGetRekapProgressGrup(_, konteks) {
   return { sukses: true, jumlah: rekap.length, daftar: rekap };
 }
 
+async function eksekusiMintaRekapHarian(_, konteks) {
+  // konteks.kirimRekapHarian di-inject dari index.js (butuh akses sock + fungsi generate AI),
+  // sama pola dengan konteks.kirimBacaanLanjutan di tools personal.
+  const terkirim = await konteks.kirimRekapHarian(konteks.groupJid);
+  if (!terkirim) {
+    return {
+      sukses: false,
+      pesan: 'Belum ada anggota grup yang aktivasi personal, jadi belum ada progress yang bisa direkap.',
+    };
+  }
+  return {
+    sukses: true,
+    catatan_untuk_ai: 'Rekap harian sudah terkirim sebagai pesan terpisah. JANGAN mengulang isi rekap lagi di balasanmu -- cukup balas singkat seperti "oke, rekapnya udah di atas ya 👆" atau semacamnya.',
+  };
+}
+
 async function eksekusiSetGrupSosialIni(_, konteks) {
   const berhasil = db.setGroupSosialJikaBelumAda(konteks.senderJid, konteks.groupJid);
 
@@ -278,6 +302,7 @@ async function eksekusiSetGrupSosialIni(_, konteks) {
 
 const EKSEKUTOR_GRUP = {
   get_rekap_progress_grup: eksekusiGetRekapProgressGrup,
+  minta_rekap_harian: eksekusiMintaRekapHarian,
   set_grup_sosial_ini: eksekusiSetGrupSosialIni,
 };
 

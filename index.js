@@ -72,6 +72,7 @@ const JEDA_TAWARAN_MS = 10 * 60 * 1000; // 1 menit (prototype)
 const AMBANG_SILENT_JAM = 6; // silent user dianggap no-response setelah 6 jam (§7.3)
 const INTERVAL_CRON_SILENT = '0 */3 * * *'; // tiap 3 jam
 const INTERVAL_CRON_MOTIVASI_GROUP = '0 16 * * 5'; // tiap Jumat jam 16:00, ajakan ngobrol ke grup aktif
+const INTERVAL_CRON_REKAP_HARIAN = '0 20 * * *'; // tiap hari jam 20:00, rekap progress ke grup aktif
 
 const JADWAL_SHOLAT = {
   subuh: { jam: 4, menit: 20 },
@@ -190,6 +191,7 @@ async function startBot() {
       setupScheduler();
       setupSilentUserChecker();
       setupGroupMotivasiScheduler();
+      setupRekapHarianScheduler();
       printHelp();
     }
   });
@@ -976,6 +978,7 @@ async function routeGroupMessage(groupJid, senderJid, text) {
         return false;
       }
     },
+    kirimRekapHarian: async (targetGroupJid) => kirimRekapHarianKeGrup(targetGroupJid, true),
   };
 
   const hasil = await jalankanAgentDawam({
@@ -1026,6 +1029,50 @@ function setupGroupMotivasiScheduler() {
   });
 
   console.log(`🕒 Group motivasi scheduler diset (${INTERVAL_CRON_MOTIVASI_GROUP}).`);
+}
+
+// ---- Rekap harian progress ke grup aktif, jam 20:00 (poin 1) ----
+let rekapHarianSchedulerSudahDiset = false;
+
+function setupRekapHarianScheduler() {
+  if (rekapHarianSchedulerSudahDiset) return;
+  rekapHarianSchedulerSudahDiset = true;
+
+  cron.schedule(INTERVAL_CRON_REKAP_HARIAN, async () => {
+    console.log('\n📊 Mengirim rekap harian ke grup aktif...');
+    const grupAktif = getAllGroupsAktif();
+
+    if (grupAktif.length === 0) {
+      console.log('(Tidak ada grup aktif saat ini)');
+      return;
+    }
+
+    for (const g of grupAktif) {
+      await kirimRekapHarianKeGrup(g.jid, false);
+    }
+  });
+
+  console.log(`🕒 Rekap harian scheduler diset (${INTERVAL_CRON_REKAP_HARIAN}).`);
+}
+
+// Dipakai cron DAN trigger manual (lewat tool grup) -- satu sumber logic.
+async function kirimRekapHarianKeGrup(groupJid, modeManual) {
+  const dataRekap = getRekapProgressGroup(groupJid);
+  const pesan = await groqAI.generateRekapHarianGroup(dataRekap, modeManual);
+
+  if (!pesan) {
+    console.log(`(Rekap harian grup ${groupJid} dilewati -- belum ada anggota yang aktivasi.)`);
+    return false;
+  }
+
+  try {
+    await sock.sendMessage(groupJid, { text: pesan });
+    console.log(`✅ Rekap harian terkirim ke grup ${groupJid} (manual=${modeManual})`);
+    return true;
+  } catch (err) {
+    console.error('❌ Gagal kirim rekap harian ke grup:', err.message);
+    return false;
+  }
 }
 
 // ========== SCHEDULER OTOMATIS PERSONAL (existing, tidak berubah) ==========

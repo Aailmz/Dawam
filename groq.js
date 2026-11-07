@@ -599,6 +599,49 @@ Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 }
 
 /**
+ * Rekap HARIAN untuk broadcast ke grup (cron jam 20:00) ATAU saat diminta manual
+ * oleh anggota grup. Beda framing dari generateRekapProgressGroup: ini laporan yang
+ * dawam mulai sendiri / ringkasan hari ini, bukan cuma jawab pertanyaan spontan.
+ * dataRekap: array dari getRekapProgressGroup (field sudah_aktivasi_personal membedakan
+ * anggota yang belum pernah kirim "dawam" ke chat pribadi vs yang sudah).
+ */
+async function generateRekapHarianGroup(dataRekap, modeManual = false) {
+  if (!dataRekap || dataRekap.length === 0) {
+    return null; // tidak ada anggota tercatat sama sekali -- jangan kirim apa-apa
+  }
+
+  const sudahAktif = dataRekap.filter((d) => d.sudah_aktivasi_personal);
+  const belumAktif = dataRekap.filter((d) => !d.sudah_aktivasi_personal);
+
+  if (sudahAktif.length === 0) {
+    return null; // belum ada satupun yang aktivasi, rekap harian percuma dikirim tiap hari
+  }
+
+  const ringkasanAktif = sudahAktif
+    .map((d) => `- ${d.nama}: ${d.posisi_terakhir}${d.juz_sekarang ? ` (juz ${d.juz_sekarang})` : ''}, target ${d.target_hari_per_juz} hari/juz${d.status_pace === 'DI_BAWAH_PACE' ? ` (kurang ${d.selisih_juz_dari_target} juz dari target)` : ''}${d.status_pace === 'SUDAH_CAPAI_PACE' ? ` (lebih ${Math.abs(d.selisih_juz_dari_target)} juz dari target)` : ''}`)
+    .join('\n');
+
+  const infoBelumAktif = belumAktif.length > 0
+    ? `\n\nAda ${belumAktif.length} anggota grup yang BELUM pernah aktivasi personal (belum kirim "dawam" ke chat pribadi bot), jadi belum ada progress yang tercatat untuk mereka.`
+    : '';
+
+  const instruksiKonteks = modeManual
+    ? 'Ini dijawab karena ada yang MINTA ditampilkan rekap harian hari ini (misal tag bot dan minta "kirim rekap harian dong").'
+    : 'Ini pesan yang kamu MULAI SENDIRI, broadcast rutin jam 8 malam, bukan balasan atas pertanyaan siapapun.';
+
+  const prompt = `${instruksiKonteks}
+
+Data progress tilawah hari ini:
+${ringkasanAktif}${infoBelumAktif}
+
+Buatkan SATU pesan rekap harian (3-6 kalimat, atau list singkat kalau anggotanya banyak) berdasarkan data di atas SAJA -- JANGAN mengarang nama atau progress yang tidak ada di data. Nada hangat, menyemangati, seperti laporan sore/malam yang santai, BUKAN laporan formal/kaku.
+${belumAktif.length > 0 ? 'Di akhir, singgung SINGKAT (1 kalimat saja, jangan sebut nama satu-satu) bahwa ada anggota yang belum aktivasi personal dan ajak mereka kirim "dawam" ke chat pribadi kalau mau progressnya ikut tercatat -- nada santai, bukan menegur.' : ''}
+Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
+
+  return await callGroqText(prompt, 450);
+}
+
+/**
  * Respon setup awal grup: dipakai sekali saat grup pertama kali aktivasi via keyword "dawam".
  * Perkenalan singkat bahwa Dawam di grup ini fungsinya beda dari personal (sosial, bukan kirim bacaan).
  */
@@ -680,5 +723,6 @@ module.exports = {
   generateResponLaporanProgres,
   generateAjakanObrolGroup,
   generateRekapProgressGroup,
+  generateRekapHarianGroup,
   generatePerkenalanGroupSosial,
 };
