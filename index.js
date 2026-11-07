@@ -249,16 +249,12 @@ function normalizeJid(message) {
 // dalam bentuk @lid; participant.jid (kalau ada) biasanya versi @s.whatsapp.net-nya.
 // Fallback: pakai apa adanya kalau tidak ada pasangannya, supaya tidak hilang dari roster.
 function normalizeParticipantJid(participant) {
-  if (participant.jid && participant.jid.endsWith('@s.whatsapp.net')) {
-    return participant.jid;
+  if (participant.phoneNumber && participant.phoneNumber.endsWith('@s.whatsapp.net')) {
+    return participant.phoneNumber;
   }
   if (participant.id && participant.id.endsWith('@s.whatsapp.net')) {
     return participant.id;
   }
-  // Tidak ada versi @s.whatsapp.net -- pakai id apa adanya (bisa @lid).
-  // Konsekuensi: kalau user ini nanti chat personal dan normalizeJid()
-  // menghasilkan @s.whatsapp.net yang beda, auto-link di 3c tidak akan nemu.
-  // Ini kita terima sebagai limitasi prototype, dicatat di log biar ketahuan.
   console.log(`⚠️  Participant ${participant.id} tidak punya pasangan @s.whatsapp.net, disimpan apa adanya.`);
   return participant.id;
 }
