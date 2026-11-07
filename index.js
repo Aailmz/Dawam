@@ -66,7 +66,7 @@ const { buatPromptPersonal, buatPromptGrup } = require('./prompts');
 
 // ========== KONFIGURASI ==========
 
-const JEDA_TAWARAN_MS = 1 * 60 * 1000; // 1 menit (prototype)
+const JEDA_TAWARAN_MS = 10 * 60 * 1000; // 1 menit (prototype)
 const AMBANG_SILENT_JAM = 6; // silent user dianggap no-response setelah 6 jam (§7.3)
 const INTERVAL_CRON_SILENT = '0 */3 * * *'; // tiap 3 jam
 const INTERVAL_CRON_MOTIVASI_GROUP = '0 16 * * 5'; // tiap Jumat jam 16:00, ajakan ngobrol ke grup aktif
