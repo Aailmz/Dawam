@@ -210,7 +210,9 @@ async function startBot() {
       .toLowerCase();
 
     if (isGroup) {
-      const sender = message.key.participant || message.key.senderPn;
+      // Prioritaskan senderPn (biasanya sudah @s.whatsapp.net) supaya konsisten
+      // dengan JID yang dipakai di roster (normalizeParticipantJid) dan di chat personal.
+      const sender = message.key.senderPn || message.key.participant;
       if (!sender) return; // tidak bisa identifikasi pengirim, abaikan
       console.log(`\n📩 [GRUP ${remoteJid}] Pesan dari ${sender}: "${text}"`);
       await handleIncomingGroupMessage(remoteJid, sender, text, message);
@@ -240,6 +242,25 @@ function normalizeJid(message) {
   }
 
   return remoteJid;
+}
+
+// Normalisasi JID mentah (dari groupMetadata, bukan dari objek message) ke bentuk
+// kanonik @s.whatsapp.net kalau memungkinkan. Baileys kadang kasih participant.id
+// dalam bentuk @lid; participant.jid (kalau ada) biasanya versi @s.whatsapp.net-nya.
+// Fallback: pakai apa adanya kalau tidak ada pasangannya, supaya tidak hilang dari roster.
+function normalizeParticipantJid(participant) {
+  if (participant.jid && participant.jid.endsWith('@s.whatsapp.net')) {
+    return participant.jid;
+  }
+  if (participant.id && participant.id.endsWith('@s.whatsapp.net')) {
+    return participant.id;
+  }
+  // Tidak ada versi @s.whatsapp.net -- pakai id apa adanya (bisa @lid).
+  // Konsekuensi: kalau user ini nanti chat personal dan normalizeJid()
+  // menghasilkan @s.whatsapp.net yang beda, auto-link di 3c tidak akan nemu.
+  // Ini kita terima sebagai limitasi prototype, dicatat di log biar ketahuan.
+  console.log(`⚠️  Participant ${participant.id} tidak punya pasangan @s.whatsapp.net, disimpan apa adanya.`);
+  return participant.id;
 }
 
 // Cek apakah bot di-mention langsung di pesan grup, atau pesan ini reply ke pesan bot.
@@ -875,7 +896,7 @@ async function handleIncomingGroupMessage(groupJid, senderJid, text, message) {
     // group_members sejak hari pertama -- bukan cuma yang pernah ngetik di grup.
     try {
       const metadata = await sock.groupMetadata(groupJid);
-      const participantJids = (metadata.participants || []).map((p) => p.id);
+      const participantJids = (metadata.participants || []).map(normalizeParticipantJid);
       for (const participantJid of participantJids) {
         tambahAnggotaGroup(groupJid, participantJid);
       }
