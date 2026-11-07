@@ -53,6 +53,7 @@ const {
   getChatHistory,
   setSudahLaporSesiIni,
   setGroupSosialJikaBelumAda,
+  hitungSisaProgressUser,
 } = require('./db');
 const groqAI = require('./groq');
 const {
@@ -586,30 +587,22 @@ async function kirimGambarBacaanMentah(jid, bacaan, jenis) {
   }
 }
 
-function hitungStatusPaceUntukAgent(jid, bacaanTerakhir) {
-  const user = getUser(jid);
-  if (user.target_juz_per_hari === '6' || !user.target_juz_per_hari || !user.tanggal_mulai_baca) {
-    return 'NORMAL';
-  }
-  const hariTercapai = bacaanTerakhir.hari_global;
-  const hariBerjalan = hitungSelisihHari(user.tanggal_mulai_baca, new Date()) + 1;
-  let hariTarget;
-  if (user.target_juz_per_hari === '3') hariTarget = hariBerjalan * 2;
-  else if (user.target_juz_per_hari === '1') hariTarget = hariBerjalan * 6;
-  else return 'NORMAL';
-  return hariTercapai < hariTarget ? 'DI_BAWAH_PACE' : 'SUDAH_CAPAI_PACE';
+function hitungStatusPaceUntukAgent(jid) {
+  const sisa = hitungSisaProgressUser(jid);
+  if (!sisa.ada_target) return { status: 'NORMAL', selisihJuz: null };
+  return { status: sisa.status, selisihJuz: sisa.selisih_juz };
 }
 
-function buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, target) {
+function buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, target, selisihJuz) {
   const bagianMode = modeArabSaja
     ? 'Bacaan Arab sudah terkirim. Tawarkan dengan natural apakah user mau lanjut baca terjemahnya juga (pakai tool kirim_terjemah_bacaan kalau user mau).'
     : 'Bacaan terjemah-saja sudah terkirim (user sedang dalam mode halangan).';
 
   let bagianPace = '';
   if (statusPace === 'DI_BAWAH_PACE') {
-    bagianPace = ` User punya target cepat (1 juz per ${target} hari) dan progress hari ini masih di bawah pace. Setelah menanggapi soal bacaan, semangati dan tawarkan apakah mau lanjut baca kartu berikutnya sekarang juga.`;
+    bagianPace = ` User punya target cepat (1 juz per ${target} hari) dan masih kurang ${selisihJuz} juz dari target hari ini. Sebutkan angka ini dengan natural, semangati, dan tawarkan apakah mau lanjut baca kartu berikutnya sekarang juga.`;
   } else if (statusPace === 'SUDAH_CAPAI_PACE') {
-    bagianPace = ` User sudah mencapai/melampaui target pace hari ini (1 juz per ${target} hari). Beri apresiasi dan beri tahu cukup untuk sesi ini, akan dilanjutkan di waktu sholat berikutnya.`;
+    bagianPace = ` User sudah mencapai/melampaui target pace hari ini (1 juz per ${target} hari), malah lebih ${Math.abs(selisihJuz)} juz dari target. Beri apresiasi, sebutkan itu, dan beri tahu cukup untuk sesi ini, akan dilanjutkan di waktu sholat berikutnya.`;
   }
 
   return bagianMode + bagianPace;
@@ -639,7 +632,7 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
   updateLastSentBacaanId(jid, nextId);
   resetNoResponse(jid);
 
-  const statusPace = hitungStatusPaceUntukAgent(jid, bacaan);
+  const { status: statusPace, selisihJuz } = hitungStatusPaceUntukAgent(jid);
   console.log(`✅ [Agent] Bacaan ${jenisDikirim} terkirim ke ${jid}: ${bacaan.surat_ayat} (id=${nextId})`);
 
   if (user.group_sosial_jid && user.sudah_lapor_sesi_ini === 0) {
@@ -659,7 +652,7 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
     surat_ayat: bacaan.surat_ayat,
     juz: bacaan.juz,
     jenis_dikirim: jenisDikirim,
-    catatan_untuk_ai: buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari),
+    catatan_untuk_ai: buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihJuz),
   };
 }
 
@@ -675,12 +668,12 @@ async function kirimTerjemahBacaanUntukAgent(jid) {
     return { sukses: false, pesan: 'Gagal mengirim gambar terjemah.' };
   }
 
-  const statusPace = hitungStatusPaceUntukAgent(jid, bacaan);
+  const { status: statusPace, selisihJuz } = hitungStatusPaceUntukAgent(jid);
   let catatan = 'Terjemah sudah terkirim.';
   if (statusPace === 'DI_BAWAH_PACE') {
-    catatan += ` User masih di bawah pace target (1 juz per ${user.target_juz_per_hari} hari), tawarkan lanjut baca kartu berikutnya.`;
+    catatan += ` User masih kurang ${selisihJuz} juz dari target (1 juz per ${user.target_juz_per_hari} hari), tawarkan lanjut baca kartu berikutnya.`;
   } else if (statusPace === 'SUDAH_CAPAI_PACE') {
-    catatan += ' User sudah capai pace hari ini, beri apresiasi dan cukupkan sesi.';
+    catatan += ` User sudah capai pace hari ini, malah lebih ${Math.abs(selisihJuz)} juz dari target. Beri apresiasi dan cukupkan sesi.`;
   }
 
   console.log(`✅ [Agent] Terjemah terkirim ke ${jid}: ${bacaan.surat_ayat}`);
@@ -692,34 +685,14 @@ async function cekKecepatanDanTawarkanLanjut(jid) {
   const user = getUser(jid);
   const nama = getUserName(jid) || 'Sahabat Dawam';
 
-  if (user.target_juz_per_hari === '6' || !user.target_juz_per_hari) {
+  const sisa = hitungSisaProgressUser(jid);
+  if (!sisa.ada_target) {
     await tutupSesiBaca(jid, nama);
     setUserState(jid, 'IDLE');
     return;
   }
 
-  const bacaanTerakhir = getBacaanById(user.last_sent_bacaan_id);
-  if (!bacaanTerakhir || !user.tanggal_mulai_baca) {
-    await tutupSesiBaca(jid, nama);
-    setUserState(jid, 'IDLE');
-    return;
-  }
-
-  const hariTercapai = bacaanTerakhir.hari_global;
-  const hariBerjalan = hitungSelisihHari(user.tanggal_mulai_baca, new Date()) + 1;
-
-  let hariTarget;
-  if (user.target_juz_per_hari === '3') {
-    hariTarget = hariBerjalan * 2;
-  } else if (user.target_juz_per_hari === '1') {
-    hariTarget = hariBerjalan * 6;
-  } else {
-    await tutupSesiBaca(jid, nama);
-    setUserState(jid, 'IDLE');
-    return;
-  }
-
-  if (hariTercapai < hariTarget) {
+  if (sisa.status === 'DI_BAWAH_PACE') {
     let pesan = await groqAI.generateTawaranLanjutSesi(nama, user.target_juz_per_hari);
     if (!pesan) {
       pesan = `Mantap, ${nama}! Mau lanjut baca lagi sekarang biar makin dekat ke target ${user.target_juz_per_hari} hari/juz, atau cukup dulu?`;

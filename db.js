@@ -307,6 +307,52 @@ function hitungHariBerjalanUser(jid) {
   return Math.floor((sekarangTengahMalam - mulaiTengahMalam) / (1000 * 60 * 60 * 24)) + 1;
 }
 
+// Hitung target vs sisa progress user (dipakai saat kirim bacaan & saat ditanya progress).
+// Satu sumber kebenaran untuk semua perhitungan pace -- jangan dihitung manual di tempat lain.
+function hitungSisaProgressUser(jid) {
+  const user = getUser(jid);
+  const bacaan = getBacaanById(user.last_sent_bacaan_id);
+  const juzSekarang = bacaan?.juz ?? null;
+
+  if (!user.target_juz_per_hari || user.target_juz_per_hari === '6' || !user.tanggal_mulai_baca) {
+    return {
+      ada_target: false,
+      target_juz_per_hari: user.target_juz_per_hari || null,
+      juz_sekarang: juzSekarang,
+    };
+  }
+
+  const hariBerjalan = hitungHariBerjalanUser(jid);
+  let hariTarget;
+  if (user.target_juz_per_hari === '3') hariTarget = hariBerjalan * 2;
+  else if (user.target_juz_per_hari === '1') hariTarget = hariBerjalan * 6;
+  else {
+    return {
+      ada_target: false,
+      target_juz_per_hari: user.target_juz_per_hari,
+      juz_sekarang: juzSekarang,
+    };
+  }
+
+  const juzTercapai = juzSekarang ?? 0;
+  const selisihJuz = hariTarget - juzTercapai;
+
+  let status;
+  if (selisihJuz > 0) status = 'DI_BAWAH_PACE';
+  else if (selisihJuz < 0) status = 'SUDAH_CAPAI_PACE';
+  else status = 'PAS_PACE';
+
+  return {
+    ada_target: true,
+    target_juz_per_hari: user.target_juz_per_hari,
+    juz_sekarang: juzSekarang,
+    hari_berjalan: hariBerjalan,
+    juz_target_hari_ini: hariTarget,
+    status,
+    selisih_juz: selisihJuz,
+  };
+}
+
 // ========== GROUPS (murni sosial, phase 3) ==========
 
 function getOrCreateGroup(jid, nama = null) {
@@ -448,6 +494,7 @@ module.exports = {
   isOnboardingLengkap,
   updateUserFields,
   hitungHariBerjalanUser,
+  hitungSisaProgressUser,
 
   // groups - phase 3 (sosial)
   getOrCreateGroup,

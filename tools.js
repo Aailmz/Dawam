@@ -143,6 +143,7 @@ const TOOLS_GRUP = [
 async function eksekusiGetProgressUser(_, konteks) {
   const user = db.getUser(konteks.jid);
   const bacaan = db.getBacaanById(user.last_sent_bacaan_id);
+  const sisaProgress = db.hitungSisaProgressUser(konteks.jid);
   return {
     sukses: true,
     posisi_terakhir: bacaan?.surat_ayat || 'belum mulai membaca',
@@ -150,6 +151,8 @@ async function eksekusiGetProgressUser(_, konteks) {
     target_hari_per_juz: user.target_juz_per_hari || 'belum ditentukan',
     hari_berjalan: db.hitungHariBerjalanUser(konteks.jid),
     mode_saat_ini: user.mode_baca_arab_saja === 1 ? 'arab' : 'terjemah-saja (halangan)',
+    status_pace: sisaProgress.status || null,
+    selisih_juz_dari_target: sisaProgress.selisih_juz ?? null,
   };
 }
 
