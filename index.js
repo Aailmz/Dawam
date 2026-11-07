@@ -261,7 +261,18 @@ function normalizeParticipantJid(participant) {
   return participant.id;
 }
 
-// Cek apakah bot di-mention langsung di pesan grup, atau pesan ini reply ke pesan bot.
+// Cek apakah sebuah JID (format apapun: @s.whatsapp.net, @lid, dengan/tanpa :device)
+// adalah JID milik bot sendiri. Dipakai untuk deteksi mention/reply DAN untuk filter
+// bot keluar dari roster grup (supaya bot tidak ikut kehitung sebagai "anggota").
+function apakahJidBot(jid) {
+  if (!jid) return false;
+  const idBersih = jid.split('@')[0].split(':')[0];
+  return (
+    (BOT_PN_NORMALIZED && idBersih === BOT_PN_NORMALIZED) ||
+    (BOT_LID_NORMALIZED && idBersih === BOT_LID_NORMALIZED)
+  );
+}
+
 function apakahBotDitag(message) {
   const contextInfo = message.message?.extendedTextMessage?.contextInfo;
   if (!contextInfo) return false;
@@ -269,17 +280,8 @@ function apakahBotDitag(message) {
   const mentionedJids = contextInfo.mentionedJid || [];
   const replyParticipant = contextInfo.participant || null;
 
-  const cocokDenganBot = (jid) => {
-    if (!jid) return false;
-    const idBersih = jid.split('@')[0].split(':')[0];
-    return (
-      (BOT_PN_NORMALIZED && idBersih === BOT_PN_NORMALIZED) ||
-      (BOT_LID_NORMALIZED && idBersih === BOT_LID_NORMALIZED)
-    );
-  };
-
-  const diMention = mentionedJids.some(cocokDenganBot);
-  const diReplyKeBot = cocokDenganBot(replyParticipant);
+  const diMention = mentionedJids.some(apakahJidBot);
+  const diReplyKeBot = apakahJidBot(replyParticipant);
 
   return diMention || diReplyKeBot;
 }
@@ -632,20 +634,20 @@ async function kirimGambarBacaanMentah(jid, bacaan, jenis) {
 
 function hitungStatusPaceUntukAgent(jid) {
   const sisa = hitungSisaProgressUser(jid);
-  if (!sisa.ada_target) return { status: 'NORMAL', selisihJuz: null };
-  return { status: sisa.status, selisihJuz: sisa.selisih_juz };
+  if (!sisa.ada_target) return { status: 'NORMAL', selisihTampilan: null };
+  return { status: sisa.status, selisihTampilan: sisa.selisih_tampilan };
 }
 
-function buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, target, selisihJuz) {
+function buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, target, selisihTampilan) {
   const bagianMode = modeArabSaja
     ? 'Bacaan Arab sudah terkirim. Tawarkan dengan natural apakah user mau lanjut baca terjemahnya juga (pakai tool kirim_terjemah_bacaan kalau user mau).'
     : 'Bacaan terjemah-saja sudah terkirim (user sedang dalam mode halangan).';
 
   let bagianPace = '';
   if (statusPace === 'DI_BAWAH_PACE') {
-    bagianPace = ` User punya target cepat (1 juz per ${target} hari) dan masih kurang ${selisihJuz} juz dari target hari ini. Sebutkan angka ini dengan natural, semangati, dan tawarkan apakah mau lanjut baca kartu berikutnya sekarang juga.`;
+    bagianPace = ` User punya target cepat (1 juz per ${target} hari) dan masih ${selisihTampilan} dari target hari ini. Sebutkan angka ini APA ADANYA (jangan dikonversi ulang), semangati, dan tawarkan apakah mau lanjut baca kartu berikutnya sekarang juga.`;
   } else if (statusPace === 'SUDAH_CAPAI_PACE') {
-    bagianPace = ` User sudah mencapai/melampaui target pace hari ini (1 juz per ${target} hari), malah lebih ${Math.abs(selisihJuz)} juz dari target. Beri apresiasi, sebutkan itu, dan beri tahu cukup untuk sesi ini, akan dilanjutkan di waktu sholat berikutnya.`;
+    bagianPace = ` User sudah mencapai/melampaui target pace hari ini (1 juz per ${target} hari), malah ${selisihTampilan} dari target. Beri apresiasi, sebutkan angka ini APA ADANYA, dan beri tahu cukup untuk sesi ini, akan dilanjutkan di waktu sholat berikutnya.`;
   }
 
   return bagianMode + bagianPace;
@@ -675,7 +677,7 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
   updateLastSentBacaanId(jid, nextId);
   resetNoResponse(jid);
 
-  const { status: statusPace, selisihJuz } = hitungStatusPaceUntukAgent(jid);
+  const { status: statusPace, selisihTampilan } = hitungStatusPaceUntukAgent(jid);
   console.log(`✅ [Agent] Bacaan ${jenisDikirim} terkirim ke ${jid}: ${bacaan.surat_ayat} (id=${nextId})`);
 
   if (user.group_sosial_jid && user.sudah_lapor_sesi_ini === 0) {
@@ -695,7 +697,7 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
     surat_ayat: bacaan.surat_ayat,
     juz: bacaan.juz,
     jenis_dikirim: jenisDikirim,
-    catatan_untuk_ai: buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihJuz),
+    catatan_untuk_ai: buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihTampilan),
   };
 }
 
@@ -711,12 +713,12 @@ async function kirimTerjemahBacaanUntukAgent(jid) {
     return { sukses: false, pesan: 'Gagal mengirim gambar terjemah.' };
   }
 
-  const { status: statusPace, selisihJuz } = hitungStatusPaceUntukAgent(jid);
+  const { status: statusPace, selisihTampilan } = hitungStatusPaceUntukAgent(jid);
   let catatan = 'Terjemah sudah terkirim.';
   if (statusPace === 'DI_BAWAH_PACE') {
-    catatan += ` User masih kurang ${selisihJuz} juz dari target (1 juz per ${user.target_juz_per_hari} hari), tawarkan lanjut baca kartu berikutnya.`;
+    catatan += ` User masih ${selisihTampilan} dari target (1 juz per ${user.target_juz_per_hari} hari), tawarkan lanjut baca kartu berikutnya.`;
   } else if (statusPace === 'SUDAH_CAPAI_PACE') {
-    catatan += ` User sudah capai pace hari ini, malah lebih ${Math.abs(selisihJuz)} juz dari target. Beri apresiasi dan cukupkan sesi.`;
+    catatan += ` User sudah capai pace hari ini, malah ${selisihTampilan} dari target. Beri apresiasi dan cukupkan sesi.`;
   }
 
   console.log(`✅ [Agent] Terjemah terkirim ke ${jid}: ${bacaan.surat_ayat}`);
@@ -908,12 +910,13 @@ async function handleIncomingGroupMessage(groupJid, senderJid, text, message) {
     // group_members sejak hari pertama -- bukan cuma yang pernah ngetik di grup.
     try {
       const metadata = await sock.groupMetadata(groupJid);
-      console.log(JSON.stringify(metadata.participants[0], null, 2));
-      const participantJids = (metadata.participants || []).map(normalizeParticipantJid);
+      const participantJids = (metadata.participants || [])
+        .map(normalizeParticipantJid)
+        .filter((jid) => !apakahJidBot(jid)); // bot sendiri tidak dihitung sebagai anggota
       for (const participantJid of participantJids) {
         tambahAnggotaGroup(groupJid, participantJid);
       }
-      console.log(`✅ Roster grup ${groupJid} diambil: ${participantJids.length} anggota tercatat.`);
+      console.log(`✅ Roster grup ${groupJid} diambil: ${participantJids.length} anggota tercatat (bot dikecualikan).`);
     } catch (err) {
       console.error('❌ Gagal ambil groupMetadata saat aktivasi:', err.message);
     }
@@ -1034,6 +1037,31 @@ function setupGroupMotivasiScheduler() {
 // ---- Rekap harian progress ke grup aktif, jam 20:00 (poin 1) ----
 let rekapHarianSchedulerSudahDiset = false;
 
+// Bangun teks rekap harian secara deterministik (bukan dikarang AI tiap kali) supaya
+// formatnya konsisten dan angkanya pasti akurat -- AI cuma nambahin kalimat motivasi.
+function formatRekapHarianTerstruktur(dataRekap) {
+  const sudahAktif = dataRekap.filter((d) => d.sudah_aktivasi_personal);
+  const belumAktif = dataRekap.filter((d) => !d.sudah_aktivasi_personal);
+
+  if (sudahAktif.length === 0) return null;
+
+  let teks = '📊 *Rekap Tilawah Hari Ini*\n\n';
+
+  for (const d of sudahAktif) {
+    const emoji = d.status_pace === 'SUDAH_CAPAI_PACE' ? '🎉' : d.status_pace === 'DI_BAWAH_PACE' ? '📖' : '✅';
+    teks += `${emoji} *${d.nama}* — ${d.posisi_terakhir}`;
+    if (d.juz_sekarang) teks += ` (juz ${d.juz_sekarang})`;
+    if (d.selisih_dari_target) teks += `\n   ${d.selisih_dari_target} dari target`;
+    teks += '\n\n';
+  }
+
+  if (belumAktif.length > 0) {
+    teks += `⏳ Ada ${belumAktif.length} anggota yang belum aktivasi personal — kirim "dawam" ke chat pribadi biar progressnya ikut tercatat.`;
+  }
+
+  return teks.trim();
+}
+
 function setupRekapHarianScheduler() {
   if (rekapHarianSchedulerSudahDiset) return;
   rekapHarianSchedulerSudahDiset = true;
@@ -1058,15 +1086,20 @@ function setupRekapHarianScheduler() {
 // Dipakai cron DAN trigger manual (lewat tool grup) -- satu sumber logic.
 async function kirimRekapHarianKeGrup(groupJid, modeManual) {
   const dataRekap = getRekapProgressGroup(groupJid);
-  const pesan = await groqAI.generateRekapHarianGroup(dataRekap, modeManual);
+  const teksRekap = formatRekapHarianTerstruktur(dataRekap);
 
-  if (!pesan) {
+  if (!teksRekap) {
     console.log(`(Rekap harian grup ${groupJid} dilewati -- belum ada anggota yang aktivasi.)`);
     return false;
   }
 
+  const adaYangDiBawahPace = dataRekap.some((d) => d.status_pace === 'DI_BAWAH_PACE');
+  const kalimatMotivasi = await groqAI.generateKalimatMotivasiRekapHarian(adaYangDiBawahPace);
+
+  const pesanFinal = kalimatMotivasi ? `${teksRekap}\n\n${kalimatMotivasi}` : teksRekap;
+
   try {
-    await sock.sendMessage(groupJid, { text: pesan });
+    await sock.sendMessage(groupJid, { text: pesanFinal });
     console.log(`✅ Rekap harian terkirim ke grup ${groupJid} (manual=${modeManual})`);
     return true;
   } catch (err) {

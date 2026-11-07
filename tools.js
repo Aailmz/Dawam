@@ -156,11 +156,14 @@ async function eksekusiGetProgressUser(_, konteks) {
     sukses: true,
     posisi_terakhir: bacaan?.surat_ayat || 'belum mulai membaca',
     juz_sekarang: bacaan?.juz ?? null,
+    halaman_sekarang: sisaProgress.halaman_sekarang,
+    total_halaman_keseluruhan: sisaProgress.total_halaman_keseluruhan,
     target_hari_per_juz: user.target_juz_per_hari || 'belum ditentukan',
     hari_berjalan: db.hitungHariBerjalanUser(konteks.jid),
     mode_saat_ini: user.mode_baca_arab_saja === 1 ? 'arab' : 'terjemah-saja (halangan)',
     status_pace: sisaProgress.status || null,
-    selisih_juz_dari_target: sisaProgress.selisih_juz ?? null,
+    selisih_dari_target: sisaProgress.selisih_tampilan || null,
+    catatan_untuk_ai: 'Field selisih_dari_target SUDAH diformat siap pakai (halaman kalau kecil, juz kalau besar) -- pakai persis angka ini, JANGAN menghitung/mengestimasi ulang sendiri.',
   };
 }
 

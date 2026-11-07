@@ -307,49 +307,71 @@ function hitungHariBerjalanUser(jid) {
   return Math.floor((sekarangTengahMalam - mulaiTengahMalam) / (1000 * 60 * 60 * 24)) + 1;
 }
 
-// Hitung target vs sisa progress user (dipakai saat kirim bacaan & saat ditanya progress).
-// Satu sumber kebenaran untuk semua perhitungan pace -- jangan dihitung manual di tempat lain.
+const TOTAL_HALAMAN_KESELURUHAN = 900; // sesuai batas nextId di index.js (900 halaman ~ 30 juz)
+const HALAMAN_PER_JUZ = TOTAL_HALAMAN_KESELURUHAN / 30; // rata 30 halaman/juz
+
+// Ubah selisih halaman jadi deskripsi yang enak dibaca: halaman kalau kecil (<1 juz),
+// juz (boleh desimal) kalau besar. Dipakai di sisi "display", basis hitung tetap halaman.
+function formatSelisihUntukTampilan(selisihHalamanAbs) {
+  if (selisihHalamanAbs < HALAMAN_PER_JUZ) {
+    return { satuan: 'halaman', nilai: selisihHalamanAbs };
+  }
+  const juz = Math.round((selisihHalamanAbs / HALAMAN_PER_JUZ) * 10) / 10; // 1 desimal
+  return { satuan: 'juz', nilai: juz };
+}
+
 function hitungSisaProgressUser(jid) {
   const user = getUser(jid);
   const bacaan = getBacaanById(user.last_sent_bacaan_id);
   const juzSekarang = bacaan?.juz ?? null;
+  const halamanSekarang = user.last_sent_bacaan_id || 0;
 
   if (!user.target_juz_per_hari || user.target_juz_per_hari === '6' || !user.tanggal_mulai_baca) {
     return {
       ada_target: false,
       target_juz_per_hari: user.target_juz_per_hari || null,
       juz_sekarang: juzSekarang,
+      halaman_sekarang: halamanSekarang,
+      total_halaman_keseluruhan: TOTAL_HALAMAN_KESELURUHAN,
     };
   }
 
   const hariBerjalan = hitungHariBerjalanUser(jid);
-  let hariTarget;
-  if (user.target_juz_per_hari === '3') hariTarget = hariBerjalan * 2;
-  else if (user.target_juz_per_hari === '1') hariTarget = hariBerjalan * 6;
+
+  let halamanPerHari;
+  if (user.target_juz_per_hari === '3') halamanPerHari = HALAMAN_PER_JUZ / 3;
+  else if (user.target_juz_per_hari === '1') halamanPerHari = HALAMAN_PER_JUZ / 1;
   else {
     return {
       ada_target: false,
       target_juz_per_hari: user.target_juz_per_hari,
       juz_sekarang: juzSekarang,
+      halaman_sekarang: halamanSekarang,
+      total_halaman_keseluruhan: TOTAL_HALAMAN_KESELURUHAN,
     };
   }
 
-  const juzTercapai = juzSekarang ?? 0;
-  const selisihJuz = hariTarget - juzTercapai;
+  const halamanTarget = Math.round(halamanPerHari * hariBerjalan);
+  const selisihHalaman = halamanTarget - halamanSekarang;
 
   let status;
-  if (selisihJuz > 0) status = 'DI_BAWAH_PACE';
-  else if (selisihJuz < 0) status = 'SUDAH_CAPAI_PACE';
+  if (selisihHalaman > 0) status = 'DI_BAWAH_PACE';
+  else if (selisihHalaman < 0) status = 'SUDAH_CAPAI_PACE';
   else status = 'PAS_PACE';
+
+  const tampilan = formatSelisihUntukTampilan(Math.abs(selisihHalaman));
 
   return {
     ada_target: true,
     target_juz_per_hari: user.target_juz_per_hari,
     juz_sekarang: juzSekarang,
+    halaman_sekarang: halamanSekarang,
     hari_berjalan: hariBerjalan,
-    juz_target_hari_ini: hariTarget,
+    halaman_target_hari_ini: halamanTarget,
+    total_halaman_keseluruhan: TOTAL_HALAMAN_KESELURUHAN,
     status,
-    selisih_juz: selisihJuz,
+    selisih_halaman: selisihHalaman,
+    selisih_tampilan: `${status === 'SUDAH_CAPAI_PACE' ? 'lebih' : 'kurang'} ${tampilan.nilai} ${tampilan.satuan}`,
   };
 }
 
@@ -451,7 +473,7 @@ function getRekapProgressGroup(groupJid) {
       juz_sekarang: bacaan?.juz ?? null,
       target_hari_per_juz: user.target_juz_per_hari || 'belum ditentukan',
       status_pace: sisaProgress.status || null,
-      selisih_juz_dari_target: sisaProgress.selisih_juz ?? null,
+      selisih_dari_target: sisaProgress.selisih_tampilan || null,
     };
   });
 }
