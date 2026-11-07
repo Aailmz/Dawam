@@ -321,6 +321,20 @@ async function handleIncomingMessage(jid, textAsli, textLower) {
   const user = getUser(jid);
   const state = user.state;
 
+  // Re-check auto-link grup sosial tiap chat personal, bukan cuma sekali saat
+  // registrasi -- kasus Mirza: onboarding personal duluan SEBELUM grupnya
+  // diaktifkan/roster diambil, jadi auto-link awal gagal nemu grup apapun.
+  // Ini jaring pengaman supaya begitu grupnya aktif belakangan, link tetap kejadian
+  // di kesempatan pertama dia chat personal lagi.
+  if (!user.group_sosial_jid) {
+    const groupDariRoster = cariGroupUntukUserDariRoster(jid);
+    if (groupDariRoster) {
+      setGroupSosialJikaBelumAda(jid, groupDariRoster);
+      user.group_sosial_jid = groupDariRoster; // sinkronkan variabel lokal biar konsisten dipakai di bawah
+      console.log(`✅ ${jid} auto-linked ke grup sosial ${groupDariRoster} (re-check saat chat).`);
+    }
+  }
+
   // ONBOARDING tetap state machine terpisah, tidak lewat agent.
   if (state === 'ONBOARDING') {
     await handleOnboardingTurn(jid, textAsli);
