@@ -896,6 +896,7 @@ async function handleIncomingGroupMessage(groupJid, senderJid, text, message) {
     // group_members sejak hari pertama -- bukan cuma yang pernah ngetik di grup.
     try {
       const metadata = await sock.groupMetadata(groupJid);
+      console.log(JSON.stringify(metadata.participants[0], null, 2));
       const participantJids = (metadata.participants || []).map(normalizeParticipantJid);
       for (const participantJid of participantJids) {
         tambahAnggotaGroup(groupJid, participantJid);
