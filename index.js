@@ -54,6 +54,7 @@ const {
   setSudahLaporSesiIni,
   setGroupSosialJikaBelumAda,
   hitungSisaProgressUser,
+  cariGroupUntukUserDariRoster,
 } = require('./db');
 const groqAI = require('./groq');
 const {
@@ -282,6 +283,15 @@ async function handleIncomingMessage(jid, textAsli, textLower) {
     if (textLower === KEYWORD_AKTIVASI) {
       registerUser(jid);
       setUserState(jid, 'ONBOARDING');
+
+      // Auto-link ke grup sosial kalau user ini sudah dikenal sebagai anggota
+      // suatu grup aktif (dari roster Baileys), walau belum pernah chat di grup itu.
+      const groupDariRoster = cariGroupUntukUserDariRoster(jid);
+      if (groupDariRoster) {
+        setGroupSosialJikaBelumAda(jid, groupDariRoster);
+        console.log(`✅ ${jid} auto-linked ke grup sosial ${groupDariRoster} (dari roster).`);
+      }
+
       await kirimPesan(jid, PESAN_SELAMAT_DATANG);
       await kirimPesan(jid, PESAN_PEMBUKA_ONBOARDING, 1500);
       console.log(`✅ User baru teraktivasi: ${jid}, mulai onboarding...`);
@@ -860,6 +870,19 @@ async function handleIncomingGroupMessage(groupJid, senderJid, text, message) {
   if (text === KEYWORD_AKTIVASI && (!group || group.is_aktif === 0)) {
     aktifkanGroup(groupJid);
     tambahAnggotaGroup(groupJid, senderJid);
+
+    // Ambil roster lengkap grup via Baileys, supaya SEMUA anggota tercatat di
+    // group_members sejak hari pertama -- bukan cuma yang pernah ngetik di grup.
+    try {
+      const metadata = await sock.groupMetadata(groupJid);
+      const participantJids = (metadata.participants || []).map((p) => p.id);
+      for (const participantJid of participantJids) {
+        tambahAnggotaGroup(groupJid, participantJid);
+      }
+      console.log(`✅ Roster grup ${groupJid} diambil: ${participantJids.length} anggota tercatat.`);
+    } catch (err) {
+      console.error('❌ Gagal ambil groupMetadata saat aktivasi:', err.message);
+    }
 
     let pesan = await groqAI.generatePerkenalanGroupSosial();
     if (!pesan) pesan = PESAN_GROUP_SETUP_FALLBACK;

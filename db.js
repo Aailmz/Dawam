@@ -403,6 +403,21 @@ function getAnggotaGroup(groupJid) {
   return db.prepare('SELECT user_jid FROM group_members WHERE group_jid = ?').all(groupJid).map((r) => r.user_jid);
 }
 
+// Cari grup sosial (yang aktif) di mana user ini terdaftar sebagai anggota,
+// dipakai untuk auto-link group_sosial_jid saat user baru onboarding personal
+// walau dia belum pernah chat duluan di grup tersebut.
+function cariGroupUntukUserDariRoster(jid) {
+  const row = db
+    .prepare(
+      `SELECT gm.group_jid FROM group_members gm
+       JOIN groups g ON g.jid = gm.group_jid
+       WHERE gm.user_jid = ? AND g.is_aktif = 1
+       ORDER BY gm.joined_at ASC LIMIT 1`
+    )
+    .get(jid);
+  return row ? row.group_jid : null;
+}
+
 function catatAktivitasGroup(groupJid, userJid, jenis, catatan = null) {
   db.prepare(
     'INSERT INTO group_activity_log (group_jid, user_jid, jenis, catatan) VALUES (?, ?, ?, ?)'
@@ -411,16 +426,32 @@ function catatAktivitasGroup(groupJid, userJid, jenis, catatan = null) {
 
 // Rekap ringan: anggota grup + progress masing-masing (dari tabel users), buat ditampilkan
 // saat ada yang nanya "progress grup gimana" atau buat broadcast motivasi mingguan.
+// PENTING: bedakan eksplisit antara "belum aktivasi personal" vs "sudah aktivasi tapi
+// belum mulai baca" -- dua kondisi ini beda dan jangan ketukar, supaya AI tidak salah
+// bilang "belum mulai" untuk orang yang sebenarnya belum pernah kirim "dawam".
 function getRekapProgressGroup(groupJid) {
   const anggotaJids = getAnggotaGroup(groupJid);
   return anggotaJids.map((jid) => {
     const user = getUser(jid);
+
+    if (user.is_registered !== 1) {
+      return {
+        nama: user.name || null,
+        sudah_aktivasi_personal: false,
+      };
+    }
+
     const bacaan = getBacaanById(user.last_sent_bacaan_id);
+    const sisaProgress = hitungSisaProgressUser(jid);
+
     return {
       nama: user.name || 'Sahabat',
-      posisi_terakhir: bacaan?.surat_ayat || 'belum mulai',
+      sudah_aktivasi_personal: true,
+      posisi_terakhir: bacaan?.surat_ayat || 'belum mulai baca',
       juz_sekarang: bacaan?.juz ?? null,
       target_hari_per_juz: user.target_juz_per_hari || 'belum ditentukan',
+      status_pace: sisaProgress.status || null,
+      selisih_juz_dari_target: sisaProgress.selisih_juz ?? null,
     };
   });
 }
@@ -508,6 +539,7 @@ module.exports = {
   getAnggotaGroup,
   catatAktivitasGroup,
   getRekapProgressGroup,
+  cariGroupUntukUserDariRoster,
 
   // chat history (untuk agent)
   simpanChatHistory,
