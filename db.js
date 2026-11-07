@@ -114,6 +114,7 @@ tambahKolomJikaBelumAda('users', 'waktu_tawaran_terakhir', 'TEXT');
 // Satu user hanya terhubung ke satu grup sosial primary untuk kesederhanaan prototype.
 tambahKolomJikaBelumAda('users', 'group_sosial_jid', 'TEXT');
 tambahKolomJikaBelumAda('users', 'sudah_lapor_sesi_ini', 'INTEGER DEFAULT 0');
+tambahKolomJikaBelumAda('users', 'start_bacaan_id', 'INTEGER DEFAULT 0');
 
 // ========== BACAAN ==========
 
@@ -228,6 +229,11 @@ function setTanggalMulaiBaca(jid, tanggalISO) {
   db.prepare('UPDATE users SET tanggal_mulai_baca = ? WHERE jid = ?').run(tanggalISO, jid);
 }
 
+function setStartBacaanId(jid, id) {
+  getOrCreateUser(jid);
+  db.prepare('UPDATE users SET start_bacaan_id = ? WHERE jid = ?').run(id, jid);
+}
+
 function incrementNoResponse(jid) {
   getOrCreateUser(jid);
   db.prepare(
@@ -311,27 +317,33 @@ const TOTAL_HALAMAN_KESELURUHAN = 900; // sesuai batas nextId di index.js (900 h
 const HALAMAN_PER_JUZ = TOTAL_HALAMAN_KESELURUHAN / 30; // rata 30 halaman/juz
 
 // Ubah selisih halaman jadi deskripsi yang enak dibaca: halaman kalau kecil (<1 juz),
-// juz (boleh desimal) kalau besar. Dipakai di sisi "display", basis hitung tetap halaman.
+// juz (bulat, tanpa desimal) kalau besar. Dipakai di sisi "display", basis hitung tetap halaman.
 function formatSelisihUntukTampilan(selisihHalamanAbs) {
   if (selisihHalamanAbs < HALAMAN_PER_JUZ) {
-    return { satuan: 'halaman', nilai: selisihHalamanAbs };
+    return { satuan: 'halaman', nilai: Math.round(selisihHalamanAbs) };
   }
-  const juz = Math.round((selisihHalamanAbs / HALAMAN_PER_JUZ) * 10) / 10; // 1 desimal
+  const juz = Math.round(selisihHalamanAbs / HALAMAN_PER_JUZ);
   return { satuan: 'juz', nilai: juz };
 }
 
+// Basis perhitungan: JARAK YANG SUDAH DITEMPUH dari titik mulai (start_bacaan_id),
+// BUKAN posisi absolut di buku. User bisa mulai dari surat manapun (tidak selalu
+// Al-Fatihah) -- posisi tinggi tidak berarti progress besar kalau start-nya juga tinggi.
 function hitungSisaProgressUser(jid) {
   const user = getUser(jid);
   const bacaan = getBacaanById(user.last_sent_bacaan_id);
   const juzSekarang = bacaan?.juz ?? null;
-  const halamanSekarang = user.last_sent_bacaan_id || 0;
+  const posisiSekarang = user.last_sent_bacaan_id || 0;
+  const startBacaanId = user.start_bacaan_id || 0;
+  const halamanDitempuh = Math.max(0, posisiSekarang - startBacaanId);
 
   if (!user.target_juz_per_hari || user.target_juz_per_hari === '6' || !user.tanggal_mulai_baca) {
     return {
       ada_target: false,
       target_juz_per_hari: user.target_juz_per_hari || null,
       juz_sekarang: juzSekarang,
-      halaman_sekarang: halamanSekarang,
+      halaman_posisi_sekarang: posisiSekarang,
+      halaman_ditempuh: halamanDitempuh,
       total_halaman_keseluruhan: TOTAL_HALAMAN_KESELURUHAN,
     };
   }
@@ -346,13 +358,14 @@ function hitungSisaProgressUser(jid) {
       ada_target: false,
       target_juz_per_hari: user.target_juz_per_hari,
       juz_sekarang: juzSekarang,
-      halaman_sekarang: halamanSekarang,
+      halaman_posisi_sekarang: posisiSekarang,
+      halaman_ditempuh: halamanDitempuh,
       total_halaman_keseluruhan: TOTAL_HALAMAN_KESELURUHAN,
     };
   }
 
   const halamanTarget = Math.round(halamanPerHari * hariBerjalan);
-  const selisihHalaman = halamanTarget - halamanSekarang;
+  const selisihHalaman = halamanTarget - halamanDitempuh;
 
   let status;
   if (selisihHalaman > 0) status = 'DI_BAWAH_PACE';
@@ -365,7 +378,8 @@ function hitungSisaProgressUser(jid) {
     ada_target: true,
     target_juz_per_hari: user.target_juz_per_hari,
     juz_sekarang: juzSekarang,
-    halaman_sekarang: halamanSekarang,
+    halaman_posisi_sekarang: posisiSekarang,
+    halaman_ditempuh: halamanDitempuh,
     hari_berjalan: hariBerjalan,
     halaman_target_hari_ini: halamanTarget,
     total_halaman_keseluruhan: TOTAL_HALAMAN_KESELURUHAN,
@@ -471,6 +485,7 @@ function getRekapProgressGroup(groupJid) {
       sudah_aktivasi_personal: true,
       posisi_terakhir: bacaan?.surat_ayat || 'belum mulai baca',
       juz_sekarang: bacaan?.juz ?? null,
+      halaman_ditempuh: sisaProgress.halaman_ditempuh ?? 0,
       target_hari_per_juz: user.target_juz_per_hari || 'belum ditentukan',
       status_pace: sisaProgress.status || null,
       selisih_dari_target: sisaProgress.selisih_tampilan || null,
@@ -533,6 +548,7 @@ module.exports = {
   setUserMulaiSurat,
   updateLastSentBacaanId,
   setTanggalMulaiBaca,
+  setStartBacaanId,
   incrementNoResponse,
   resetNoResponse,
   setModeArabSaja,

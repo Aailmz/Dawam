@@ -28,6 +28,7 @@ const {
   setUserMulaiSurat,
   updateLastSentBacaanId,
   setTanggalMulaiBaca,
+  setStartBacaanId,
   incrementNoResponse,
   resetNoResponse,
   setModeArabSaja,
@@ -412,6 +413,7 @@ async function handleOnboardingTurn(jid, text) {
           const bacaanDitemukan = cariBacaanBySuratLike(surat);
           if (bacaanDitemukan) {
             updateLastSentBacaanId(jid, bacaanDitemukan.id - 1);
+            setStartBacaanId(jid, bacaanDitemukan.id - 1); // titik berangkat, buat hitung pace dari sini
             await sock.sendMessage(jid, {
               text: `Siap, Dawam akan mulai dari sekitar ${bacaanDitemukan.surat_ayat} ya 🤍`,
             });
@@ -1051,7 +1053,8 @@ function formatRekapHarianTerstruktur(dataRekap) {
     const emoji = d.status_pace === 'SUDAH_CAPAI_PACE' ? '🎉' : d.status_pace === 'DI_BAWAH_PACE' ? '📖' : '✅';
     teks += `${emoji} *${d.nama}* — ${d.posisi_terakhir}`;
     if (d.juz_sekarang) teks += ` (juz ${d.juz_sekarang})`;
-    if (d.selisih_dari_target) teks += `\n   ${d.selisih_dari_target} dari target`;
+    teks += `\n   sudah menempuh ${d.halaman_ditempuh} halaman`;
+    if (d.selisih_dari_target) teks += `, ${d.selisih_dari_target} dari target`;
     teks += '\n\n';
   }
 

@@ -156,14 +156,15 @@ async function eksekusiGetProgressUser(_, konteks) {
     sukses: true,
     posisi_terakhir: bacaan?.surat_ayat || 'belum mulai membaca',
     juz_sekarang: bacaan?.juz ?? null,
-    halaman_sekarang: sisaProgress.halaman_sekarang,
+    halaman_posisi_sekarang: sisaProgress.halaman_posisi_sekarang,
+    halaman_ditempuh: sisaProgress.halaman_ditempuh,
     total_halaman_keseluruhan: sisaProgress.total_halaman_keseluruhan,
     target_hari_per_juz: user.target_juz_per_hari || 'belum ditentukan',
     hari_berjalan: db.hitungHariBerjalanUser(konteks.jid),
     mode_saat_ini: user.mode_baca_arab_saja === 1 ? 'arab' : 'terjemah-saja (halangan)',
     status_pace: sisaProgress.status || null,
     selisih_dari_target: sisaProgress.selisih_tampilan || null,
-    catatan_untuk_ai: 'Field selisih_dari_target SUDAH diformat siap pakai (halaman kalau kecil, juz kalau besar) -- pakai persis angka ini, JANGAN menghitung/mengestimasi ulang sendiri.',
+    catatan_untuk_ai: 'posisi_terakhir/juz_sekarang cuma LOKASI baca (bisa jadi user memang mulai dari situ, bukan berarti progress banyak). Progress SEBENARNYA ada di halaman_ditempuh (jumlah halaman yang sudah dibaca sejak mulai) dan selisih_dari_target (sudah final, pakai apa adanya, JANGAN dihitung ulang).',
   };
 }
 
@@ -222,10 +223,13 @@ async function eksekusiSetPosisiBacaan({ nama_surat }, konteks) {
     return { sukses: false, pesan: `Surat "${nama_surat}" tidak ditemukan di data bacaan.` };
   }
   db.updateLastSentBacaanId(konteks.jid, bacaan.id - 1);
+  // Pindah posisi manual = titik berangkat baru -- reset start_bacaan_id juga,
+  // supaya pace/progress dihitung ulang dari sini, bukan ketimpa hitungan lama.
+  db.setStartBacaanId(konteks.jid, bacaan.id - 1);
   return {
     sukses: true,
     surat_ayat: bacaan.surat_ayat,
-    catatan_untuk_ai: `Posisi bacaan user dipindah ke sekitar ${bacaan.surat_ayat}. Bacaan berikutnya yang dikirim akan mulai dari sini.`,
+    catatan_untuk_ai: `Posisi bacaan user dipindah ke sekitar ${bacaan.surat_ayat}. Bacaan berikutnya yang dikirim akan mulai dari sini, dan progress/pace dihitung ulang dari titik ini.`,
   };
 }
 
