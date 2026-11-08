@@ -129,7 +129,7 @@ const TOOLS_GRUP = [
     type: 'function',
     function: {
       name: 'minta_rekap_harian',
-      description: 'Kirim pesan rekap harian progress grup (format yang sama dengan broadcast otomatis jam 8 malam) ke grup ini SEKARANG JUGA. Panggil kalau ada yang eksplisit minta "kirim rekap harian", "kayak laporan harian dong", atau semacamnya -- beda dari get_rekap_progress_grup yang untuk pertanyaan spontan biasa.',
+      description: 'Kirim pesan rekap harian progress grup (termasuk persen capaian dari target harian, dan otomatis nge-tag anggota yang belum baca sama sekali hari ini) ke grup ini SEKARANG JUGA. Panggil kalau ada yang eksplisit minta "kirim rekap harian", "berapa persen progress hari ini", "tag yang belum baca/belum tilawah hari ini", atau semacamnya -- beda dari get_rekap_progress_grup yang untuk pertanyaan spontan biasa tanpa perlu kirim pesan rekap terpisah.',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -279,10 +279,8 @@ async function eksekusiGetRekapProgressGrup(_, konteks) {
 }
 
 async function eksekusiMintaRekapHarian(_, konteks) {
-  // konteks.kirimRekapHarian di-inject dari index.js (butuh akses sock + fungsi generate AI),
-  // sama pola dengan konteks.kirimBacaanLanjutan di tools personal.
-  const terkirim = await konteks.kirimRekapHarian(konteks.groupJid);
-  if (!terkirim) {
+  const hasil = await konteks.kirimRekapHarian(konteks.groupJid);
+  if (!hasil.terkirim) {
     return {
       sukses: false,
       pesan: 'Belum ada anggota grup yang aktivasi personal, jadi belum ada progress yang bisa direkap.',
@@ -290,7 +288,8 @@ async function eksekusiMintaRekapHarian(_, konteks) {
   }
   return {
     sukses: true,
-    catatan_untuk_ai: 'Rekap harian sudah terkirim sebagai pesan terpisah. JANGAN mengulang isi rekap lagi di balasanmu -- cukup balas singkat seperti "oke, rekapnya udah di atas ya 👆" atau semacamnya.',
+    jumlah_ditag: hasil.jidUntukMention.length,
+    catatan_untuk_ai: `Rekap harian (termasuk persen dari target, dan tag ke yang belum baca hari ini kalau ada) sudah terkirim sebagai pesan terpisah. JANGAN mengulang isi rekap/nama yang ditag lagi di balasanmu -- cukup balas singkat seperti "oke, rekapnya udah di atas ya 👆" atau semacamnya.`,
   };
 }
 

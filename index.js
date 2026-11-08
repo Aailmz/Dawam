@@ -29,6 +29,7 @@ const {
   updateLastSentBacaanId,
   setTanggalMulaiBaca,
   setStartBacaanId,
+  setTanggalTerakhirBaca,
   incrementNoResponse,
   resetNoResponse,
   setModeArabSaja,
@@ -673,9 +674,11 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
     return { sukses: false, pesan: 'Gagal mengirim gambar bacaan.' };
   }
 
+  const hariIniISO = new Date().toISOString().slice(0, 10);
   if (!user.tanggal_mulai_baca) {
-    setTanggalMulaiBaca(jid, new Date().toISOString().slice(0, 10));
+    setTanggalMulaiBaca(jid, hariIniISO);
   }
+  setTanggalTerakhirBaca(jid, hariIniISO);
   updateLastSentBacaanId(jid, nextId);
   resetNoResponse(jid);
 
@@ -906,10 +909,12 @@ async function handleIncomingGroupMessage(groupJid, senderJid, text, message) {
   // Keyword aktivasi grup -- siapa saja di grup bisa trigger setup
   if (text === KEYWORD_AKTIVASI && (!group || group.is_aktif === 0)) {
     aktifkanGroup(groupJid);
-    tambahAnggotaGroup(groupJid, senderJid);
 
     // Ambil roster lengkap grup via Baileys, supaya SEMUA anggota tercatat di
     // group_members sejak hari pertama -- bukan cuma yang pernah ngetik di grup.
+    // JANGAN insert senderJid mentah di sini -- biarkan roster (sudah dinormalisasi
+    // ke @s.whatsapp.net) jadi satu-satunya sumber, supaya tidak ada duplikasi JID
+    // untuk orang yang sama (kasus Mirza: @lid vs @s.whatsapp.net).
     try {
       const metadata = await sock.groupMetadata(groupJid);
       const participantJids = (metadata.participants || [])
@@ -983,7 +988,7 @@ async function routeGroupMessage(groupJid, senderJid, text) {
         return false;
       }
     },
-    kirimRekapHarian: async (targetGroupJid) => kirimRekapHarianKeGrup(targetGroupJid, true),
+    kirimRekapHarian: async (targetGroupJid) => kirimRekapHarianKeGrup(targetGroupJid, true, true),
   };
 
   const hasil = await jalankanAgentDawam({
@@ -1039,13 +1044,20 @@ function setupGroupMotivasiScheduler() {
 // ---- Rekap harian progress ke grup aktif, jam 20:00 (poin 1) ----
 let rekapHarianSchedulerSudahDiset = false;
 
+// Anggota yang sudah aktivasi tapi belum baca hari ini -- kandidat untuk di-tag.
+function ambilJidBelumBacaHariIni(dataRekap) {
+  return dataRekap
+    .filter((d) => d.sudah_aktivasi_personal && !d.sudah_baca_hari_ini)
+    .map((d) => d.jid);
+}
+
 // Bangun teks rekap harian secara deterministik (bukan dikarang AI tiap kali) supaya
 // formatnya konsisten dan angkanya pasti akurat -- AI cuma nambahin kalimat motivasi.
-function formatRekapHarianTerstruktur(dataRekap) {
+function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
   const sudahAktif = dataRekap.filter((d) => d.sudah_aktivasi_personal);
   const belumAktif = dataRekap.filter((d) => !d.sudah_aktivasi_personal);
 
-  if (sudahAktif.length === 0) return null;
+  if (sudahAktif.length === 0) return { teks: null, jidUntukMention: [] };
 
   let teks = '📊 *Rekap Tilawah Hari Ini*\n\n';
 
@@ -1055,14 +1067,26 @@ function formatRekapHarianTerstruktur(dataRekap) {
     if (d.juz_sekarang) teks += ` (juz ${d.juz_sekarang})`;
     teks += `\n   sudah menempuh ${d.halaman_ditempuh} halaman`;
     if (d.selisih_dari_target) teks += `, ${d.selisih_dari_target} dari target`;
+    if (d.persen_pace !== null) teks += ` (${d.persen_pace}% dari target harian)`;
     teks += '\n\n';
   }
 
   if (belumAktif.length > 0) {
-    teks += `⏳ Ada ${belumAktif.length} anggota yang belum aktivasi personal — kirim "dawam" ke chat pribadi biar progressnya ikut tercatat.`;
+    teks += `⏳ Ada ${belumAktif.length} anggota yang belum aktivasi personal — kirim "dawam" ke chat pribadi biar progressnya ikut tercatat.\n\n`;
   }
 
-  return teks.trim();
+  let jidUntukMention = [];
+  if (sertakanTagBelumBaca) {
+    const jidBelumBaca = ambilJidBelumBacaHariIni(dataRekap);
+    if (jidBelumBaca.length > 0) {
+      const namaBelumBaca = dataRekap.filter((d) => jidBelumBaca.includes(d.jid));
+      const tagText = namaBelumBaca.map((d) => `@${d.jid.split('@')[0]}`).join(' ');
+      teks += `🤍 Yuk mampir sebentar sebelum Isya, belum sempat baca hari ini: ${tagText}`;
+      jidUntukMention = jidBelumBaca;
+    }
+  }
+
+  return { teks: teks.trim(), jidUntukMention };
 }
 
 function setupRekapHarianScheduler() {
@@ -1079,7 +1103,7 @@ function setupRekapHarianScheduler() {
     }
 
     for (const g of grupAktif) {
-      await kirimRekapHarianKeGrup(g.jid, false);
+      await kirimRekapHarianKeGrup(g.jid, false, true);
     }
   });
 
@@ -1087,13 +1111,13 @@ function setupRekapHarianScheduler() {
 }
 
 // Dipakai cron DAN trigger manual (lewat tool grup) -- satu sumber logic.
-async function kirimRekapHarianKeGrup(groupJid, modeManual) {
+async function kirimRekapHarianKeGrup(groupJid, modeManual, sertakanTagBelumBaca = true) {
   const dataRekap = getRekapProgressGroup(groupJid);
-  const teksRekap = formatRekapHarianTerstruktur(dataRekap);
+  const { teks: teksRekap, jidUntukMention } = formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca);
 
   if (!teksRekap) {
     console.log(`(Rekap harian grup ${groupJid} dilewati -- belum ada anggota yang aktivasi.)`);
-    return false;
+    return { terkirim: false, jidUntukMention: [] };
   }
 
   const adaYangDiBawahPace = dataRekap.some((d) => d.status_pace === 'DI_BAWAH_PACE');
@@ -1102,12 +1126,12 @@ async function kirimRekapHarianKeGrup(groupJid, modeManual) {
   const pesanFinal = kalimatMotivasi ? `${teksRekap}\n\n${kalimatMotivasi}` : teksRekap;
 
   try {
-    await sock.sendMessage(groupJid, { text: pesanFinal });
-    console.log(`✅ Rekap harian terkirim ke grup ${groupJid} (manual=${modeManual})`);
-    return true;
+    await sock.sendMessage(groupJid, { text: pesanFinal, mentions: jidUntukMention });
+    console.log(`✅ Rekap harian terkirim ke grup ${groupJid} (manual=${modeManual}, tag=${jidUntukMention.length})`);
+    return { terkirim: true, jidUntukMention };
   } catch (err) {
     console.error('❌ Gagal kirim rekap harian ke grup:', err.message);
-    return false;
+    return { terkirim: false, jidUntukMention: [] };
   }
 }
 

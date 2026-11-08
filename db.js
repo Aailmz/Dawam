@@ -115,6 +115,7 @@ tambahKolomJikaBelumAda('users', 'waktu_tawaran_terakhir', 'TEXT');
 tambahKolomJikaBelumAda('users', 'group_sosial_jid', 'TEXT');
 tambahKolomJikaBelumAda('users', 'sudah_lapor_sesi_ini', 'INTEGER DEFAULT 0');
 tambahKolomJikaBelumAda('users', 'start_bacaan_id', 'INTEGER DEFAULT 0');
+tambahKolomJikaBelumAda('users', 'tanggal_terakhir_baca', 'TEXT');
 
 // ========== BACAAN ==========
 
@@ -234,6 +235,11 @@ function setStartBacaanId(jid, id) {
   db.prepare('UPDATE users SET start_bacaan_id = ? WHERE jid = ?').run(id, jid);
 }
 
+function setTanggalTerakhirBaca(jid, tanggalISO) {
+  getOrCreateUser(jid);
+  db.prepare('UPDATE users SET tanggal_terakhir_baca = ? WHERE jid = ?').run(tanggalISO, jid);
+}
+
 function incrementNoResponse(jid) {
   getOrCreateUser(jid);
   db.prepare(
@@ -337,6 +343,7 @@ function hitungSisaProgressUser(jid) {
   const startBacaanId = user.start_bacaan_id || 0;
   const halamanDitempuh = Math.max(0, posisiSekarang - startBacaanId);
 
+  const hariIniISOAwal = new Date().toISOString().slice(0, 10);
   if (!user.target_juz_per_hari || user.target_juz_per_hari === '6' || !user.tanggal_mulai_baca) {
     return {
       ada_target: false,
@@ -345,6 +352,7 @@ function hitungSisaProgressUser(jid) {
       halaman_posisi_sekarang: posisiSekarang,
       halaman_ditempuh: halamanDitempuh,
       total_halaman_keseluruhan: TOTAL_HALAMAN_KESELURUHAN,
+      sudah_baca_hari_ini: user.tanggal_terakhir_baca === hariIniISOAwal,
     };
   }
 
@@ -373,6 +381,9 @@ function hitungSisaProgressUser(jid) {
   else status = 'PAS_PACE';
 
   const tampilan = formatSelisihUntukTampilan(Math.abs(selisihHalaman));
+  const persenPace = halamanTarget > 0 ? Math.round((halamanDitempuh / halamanTarget) * 100) : null;
+  const hariIniISO = new Date().toISOString().slice(0, 10);
+  const sudahBacaHariIni = user.tanggal_terakhir_baca === hariIniISO;
 
   return {
     ada_target: true,
@@ -386,6 +397,8 @@ function hitungSisaProgressUser(jid) {
     status,
     selisih_halaman: selisihHalaman,
     selisih_tampilan: `${status === 'SUDAH_CAPAI_PACE' ? 'lebih' : 'kurang'} ${tampilan.nilai} ${tampilan.satuan}`,
+    persen_pace: persenPace,
+    sudah_baca_hari_ini: sudahBacaHariIni,
   };
 }
 
@@ -482,6 +495,7 @@ function getRekapProgressGroup(groupJid) {
 
     return {
       nama: user.name || 'Sahabat',
+      jid, // dibutuhkan untuk mentions saat tag di grup
       sudah_aktivasi_personal: true,
       posisi_terakhir: bacaan?.surat_ayat || 'belum mulai baca',
       juz_sekarang: bacaan?.juz ?? null,
@@ -489,6 +503,8 @@ function getRekapProgressGroup(groupJid) {
       target_hari_per_juz: user.target_juz_per_hari || 'belum ditentukan',
       status_pace: sisaProgress.status || null,
       selisih_dari_target: sisaProgress.selisih_tampilan || null,
+      persen_pace: sisaProgress.persen_pace ?? null,
+      sudah_baca_hari_ini: sisaProgress.sudah_baca_hari_ini ?? false,
     };
   });
 }
@@ -549,6 +565,7 @@ module.exports = {
   updateLastSentBacaanId,
   setTanggalMulaiBaca,
   setStartBacaanId,
+  setTanggalTerakhirBaca,
   incrementNoResponse,
   resetNoResponse,
   setModeArabSaja,
