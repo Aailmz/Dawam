@@ -486,6 +486,7 @@ function getRekapProgressGroup(groupJid) {
     if (user.is_registered !== 1) {
       return {
         nama: user.name || null,
+        jid,
         sudah_aktivasi_personal: false,
       };
     }

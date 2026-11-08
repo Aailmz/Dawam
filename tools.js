@@ -136,6 +136,28 @@ const TOOLS_GRUP = [
   {
     type: 'function',
     function: {
+      name: 'tag_anggota_grup',
+      description: 'Kirim pesan ke grup yang nge-tag (mention) anggota tertentu berdasarkan kriteria APAPUN yang diminta user (belum aktivasi, belum baca hari ini, progress paling rendah/tinggi, nama spesifik, dll). WAJIB panggil get_rekap_progress_grup DULU untuk ambil data+jid semua anggota, pilih sendiri siapa yang cocok dengan kriteria yang diminta, baru panggil tool ini dengan jid mereka. JANGAN mengarang jid atau nama yang tidak ada di data.',
+      parameters: {
+        type: 'object',
+        properties: {
+          jid_list: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Daftar JID anggota yang mau ditag, diambil persis dari field "jid" pada data get_rekap_progress_grup.',
+          },
+          pesan_pembuka: {
+            type: 'string',
+            description: 'Kalimat singkat sebelum tag, sesuai konteks permintaan user (misal: "Yuk yang belum gabung, kirim dawam ke chat pribadi ya" atau "Reminder buat yang belum baca hari ini").',
+          },
+        },
+        required: ['jid_list', 'pesan_pembuka'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'set_grup_sosial_ini',
       description: 'Jadikan grup ini sebagai grup sosial resmi pengirim pesan (tempat lapor progress & broadcast). Panggil kalau user eksplisit minta menghubungkan/memindahkan dirinya ke grup ini.',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -293,6 +315,21 @@ async function eksekusiMintaRekapHarian(_, konteks) {
   };
 }
 
+async function eksekusiTagAnggotaGrup({ jid_list, pesan_pembuka }, konteks) {
+  if (!jid_list || jid_list.length === 0) {
+    return { sukses: false, pesan: 'Tidak ada anggota yang cocok untuk ditag berdasarkan kriteria ini.' };
+  }
+  const terkirim = await konteks.kirimTagKeGrup(konteks.groupJid, pesan_pembuka, jid_list);
+  if (!terkirim) {
+    return { sukses: false, pesan: 'Gagal mengirim tag ke grup.' };
+  }
+  return {
+    sukses: true,
+    jumlah_ditag: jid_list.length,
+    catatan_untuk_ai: 'Pesan tag sudah terkirim sebagai pesan terpisah. Balas singkat saja, JANGAN mengulang isi pesan/nama yang ditag.',
+  };
+}
+
 async function eksekusiSetGrupSosialIni(_, konteks) {
   const berhasil = db.setGroupSosialJikaBelumAda(konteks.senderJid, konteks.groupJid);
 
@@ -309,6 +346,7 @@ async function eksekusiSetGrupSosialIni(_, konteks) {
 const EKSEKUTOR_GRUP = {
   get_rekap_progress_grup: eksekusiGetRekapProgressGrup,
   minta_rekap_harian: eksekusiMintaRekapHarian,
+  tag_anggota_grup: eksekusiTagAnggotaGrup,
   set_grup_sosial_ini: eksekusiSetGrupSosialIni,
 };
 

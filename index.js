@@ -989,6 +989,7 @@ async function routeGroupMessage(groupJid, senderJid, text) {
       }
     },
     kirimRekapHarian: async (targetGroupJid) => kirimRekapHarianKeGrup(targetGroupJid, true, true),
+    kirimTagKeGrup: (targetGroupJid, pesan, jidList) => kirimTagKeGrup(targetGroupJid, pesan, jidList),
   };
 
   const hasil = await jalankanAgentDawam({
@@ -1132,6 +1133,22 @@ async function kirimRekapHarianKeGrup(groupJid, modeManual, sertakanTagBelumBaca
   } catch (err) {
     console.error('❌ Gagal kirim rekap harian ke grup:', err.message);
     return { terkirim: false, jidUntukMention: [] };
+  }
+}
+
+// Kirim pesan ke grup dengan mention anggota tertentu -- generik, dipakai untuk
+// berbagai kriteria tag (belum aktivasi, belum baca hari ini, orang spesifik, dll),
+// AI yang tentukan jidList-nya dari data get_rekap_progress_grup.
+async function kirimTagKeGrup(groupJid, pesanPembuka, jidList) {
+  const tagText = jidList.map((jid) => `@${jid.split('@')[0]}`).join(' ');
+  const teks = `${pesanPembuka}\n\n${tagText}`;
+  try {
+    await sock.sendMessage(groupJid, { text: teks, mentions: jidList });
+    console.log(`✅ Tag terkirim ke grup ${groupJid} untuk ${jidList.length} orang.`);
+    return true;
+  } catch (err) {
+    console.error('❌ Gagal kirim tag ke grup:', err.message);
+    return false;
   }
 }
 
