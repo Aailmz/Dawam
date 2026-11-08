@@ -687,7 +687,7 @@ async function callGroqText(userPrompt, maxTokens = 350, extraOptions = {}) {
     // kemungkinan reasoning model yang menghitung reasoning tokens ke dalam max_tokens,
     // jadi walau field reasoning_effort tidak diset, token tetap bisa habis duluan
     // sebelum nulis jawaban final kalau maxTokens kekecilan.
-    const amanMinimal = Math.max(maxTokens, 800);
+    const amanMinimal = Math.max(maxTokens, 2800);
 
     const completion = await groq.chat.completions.create({
       model: MODEL,
