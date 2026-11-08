@@ -477,7 +477,8 @@ Extract SEBANYAK MUNGKIN field berikut KALAU disebutkan/tersirat jelas di pesan 
 - name: nama panggilan (rapikan Kapital Awal Kata)
 - location: kota/daerah domisili (rapikan Kapital Awal Kata)
 - gender: "L" (laki-laki/akhi) atau "P" (perempuan/ukhti)
-- target_juz_per_hari: "6", "3", atau "1" (hari per juz). User bisa jawab dengan ANGKA PILIHAN (1/2/3, sesuai urutan list yang ditawarkan: 1="6", 2="3", 3="1") ATAU teks bebas (misal "santai"/"3 hari"/"yang cepat"). Petakan ke salah satu dari "6"/"3"/"1" sesuai maksudnya -- kalau jawabannya angka "1" artinya pilih opsi pertama (target "6"), angka "2" artinya opsi kedua (target "3"), angka "3" artinya opsi ketiga (target "1"). Kalau ambigu, null.
+- target_juz_per_hari: "6", "3", atau "1". PENTING soal satuan: angka ini artinya "1 JUZ PER BERAPA HARI", BUKAN jumlah juz per hari dan BUKAN total hari khatam keseluruhan. Jadi "6" = santai = butuh 6 hari untuk menyelesaikan 1 juz (paling lambat). "3" = sedang = 1 juz per 3 hari. "1" = cepat = 1 juz per hari (tercepat). Semakin BESAR angkanya, semakin SANTAI/LAMBAT temponya -- JANGAN disalahartikan jadi "semakin besar = semakin rajin/banyak juz per hari", itu TERBALIK.
+  User bisa jawab dengan ANGKA PILIHAN (1/2/3, sesuai urutan list yang ditawarkan: pilihan 1="6", pilihan 2="3", pilihan 3="1") ATAU teks bebas (misal "santai"/"3 hari"/"yang cepat"). Petakan ke salah satu dari "6"/"3"/"1" sesuai maksudnya -- kalau jawabannya angka pilihan "1" artinya target "6", angka pilihan "2" artinya target "3", angka pilihan "3" artinya target "1". Kalau ambigu, null.
 - motivasi_personal: cerita singkat apa yang bikin semangat baca Qur'an (simpan apa adanya, lowercase oke)
 - mulai_surat: nama surat kalau user sebut mau mulai dari situ, null kalau "dari awal"/tidak disebut
 
@@ -525,10 +526,14 @@ async function generateLanjutanOnboarding(namaUser, fieldBaruTerisi, fieldMasihK
 
   const fieldBerikutnya = labelField[fieldMasihKosong[0]];
 
+  const infoTargetKhatam = fieldBaruTerisi.includes('target_juz_per_hari')
+    ? '\n\nCATATAN KHUSUS: salah satu info yang baru masuk itu target_juz_per_hari. Kalau mau konfirmasi balik ke user, SEBUTKAN APA ADANYA dalam bentuk "1 juz per X hari" (misal target "6" = "1 juz tiap 6 hari, santai ya" / target "3" = "1 juz per 3 hari" / target "1" = "1 juz tiap hari, cepat nih"). JANGAN PERNAH menghitung ulang atau mengonversi ke bentuk lain (misal JANGAN bilang "berarti X juz sehari" atau "Y juz dalam seminggu") -- itu gampang kebalik dan salah hitung, cukup sebutkan temponya apa adanya.'
+    : '';
+
   const prompt = `Kamu lagi kenalan santai sama ${namaUser || 'user baru'} lewat chat, ngumpulin info buat setup tilawah-nya (nama, domisili, gender akhi/ukhti, target khatam, motivasi, mulai dari surat apa).
 
 Pesan terakhir dari user: "${pesanUserTerakhir}"
-${fieldBaruTerisi.length > 0 ? `Info yang baru aja kamu dapet dari pesan itu: ${fieldBaruTerisi.join(', ')}.` : 'Belum ada info baru yang ketangkep dari pesan ini (mungkin kurang jelas).'}
+${fieldBaruTerisi.length > 0 ? `Info yang baru aja kamu dapet dari pesan itu: ${fieldBaruTerisi.join(', ')}.` : 'Belum ada info baru yang ketangkep dari pesan ini (mungkin kurang jelas).'}${infoTargetKhatam}
 
 Yang masih perlu kamu tanyakan berikutnya: ${fieldBerikutnya}.
 
