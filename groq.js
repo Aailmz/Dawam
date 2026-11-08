@@ -554,13 +554,17 @@ Balas HANYA isi pesannya, tanpa tanda kutip.`;
  * generik, lalu kasih tau next step konkret (reminder sholat bakal mulai, dll).
  */
 async function generateCTASetelahOnboarding(nama, motivasiPersonal, targetJuzPerHari, lokasi) {
-  const motivasiText = motivasiPersonal
-    ? `Motivasi personal yang dia kasih tadi: "${motivasiPersonal}".`
-    : 'Dia tidak kasih motivasi personal spesifik.';
+  const adaMotivasi = !!motivasiPersonal;
 
-  const prompt = `${nama} baru aja SELESAI onboarding dan baru dikasih penjelasan soal cara kerja Dawam (reminder sholat + ajakan tilawah). Datanya: domisili ${lokasi}, target khatam 1 juz per ${targetJuzPerHari} hari. ${motivasiText}
+  const instruksiArah = adaMotivasi
+    ? `Dia tadi bilang motivasi personalnya: "${motivasiPersonal}". Gunakan INI sebagai titik pancingan obrolan -- perdalam santai dari situ, kepoin dikit yang related ke motivasinya itu sendiri (bukan soal ibadah/tilawah-nya, tapi soal HAL ITU sendiri sebagai bagian hidupnya). Misal kalau motivasinya nyebut suatu barang/impian/orang/kebiasaan, tanya lebih jauh soal itu dengan nada santai dan penasaran kayak temen, bukan analisis serius.`
+    : `Dia tidak kasih motivasi personal spesifik, jadi tanya hal random soal dirinya sebagai orang (kesibukan, hobi, dll).`;
 
-Buatkan SATU pesan PENDEK (1-2 kalimat saja, BUKAN paragraf panjang) berupa PERTANYAAN RINGAN buat lebih kenal PERSONA/KEBIASAAN dia (BUKAN soal tilawah/ajakan baca sekarang, itu sudah dibahas di pesan sebelumnya). Contoh arah pertanyaan: kebiasaan baca Qur'an-nya selama ini gimana, lebih nyaman baca pagi/malam, atau sekadar nanya kabar/kesibukannya sekarang. Nada hangat, ringan, kayak nanya temen baru kenal, BUKAN kaku/formal, dan JANGAN menyinggung soal mulai baca/tilawah sekarang.
+  const prompt = `${nama} baru aja SELESAI onboarding sama kamu (Dawam) dan baru dikasih penjelasan soal cara kerja Dawam. Domisilinya di ${lokasi}.
+
+${instruksiArah}
+
+Buatkan SATU pesan PENDEK (1 kalimat saja, berupa pertanyaan), nada santai dan penasaran kayak temen ngobrol, BUKAN interogasi/formal. SAMA SEKALI JANGAN menyinggung sholat, tilawah, Qur'an, target khatam, ibadah, atau apapun yang berhubungan dengan fitur Dawam -- itu topik terpisah yang sudah selesai dibahas sebelumnya, ini murni obrolan kenalan personal.
 Balas HANYA isi pesannya, tanpa tanda kutip.`;
 
   return await callGroqText(prompt, 300);
