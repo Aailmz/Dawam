@@ -263,6 +263,44 @@ function normalizeParticipantJid(participant) {
   return participant.id;
 }
 
+// Resolve 1 JID (biasanya dari sender pesan masuk, bisa @lid) ke bentuk
+// @s.whatsapp.net dengan cari di groupMetadata grup terkait -- reuse field
+// phoneNumber yang sudah terbukti ada di situ (lihat normalizeParticipantJid).
+async function resolveSenderJidViaGroupMetadata(groupJid, senderJid) {
+  if (!senderJid.endsWith('@lid')) return senderJid; // sudah bentuk normal, tidak perlu resolve
+
+  try {
+    const metadata = await sock.groupMetadata(groupJid);
+    const match = (metadata.participants || []).find((p) => p.id === senderJid);
+    if (match?.phoneNumber && match.phoneNumber.endsWith('@s.whatsapp.net')) {
+      return match.phoneNumber;
+    }
+  } catch (err) {
+    console.error('❌ Gagal resolve senderJid via groupMetadata:', err.message);
+  }
+
+  console.log(`⚠️  Tidak bisa resolve ${senderJid} ke @s.whatsapp.net lewat groupMetadata, dipakai apa adanya.`);
+  return senderJid;
+}
+
+// Kalau senderJid berupa @lid tapi versi @s.whatsapp.net-nya SUDAH ada di users
+// (match by nomor telepon yang sama persis setelah @lid di-resolve lewat sock),
+// pakai versi @s.whatsapp.net itu. Baileys biasanya expose pasangan ini lewat
+// sock.signalRepository atau message.key.senderPn saat pesan masuk -- tapi di titik
+// ini kita cuma punya senderJid mentah, jadi pendekatan paling aman: cek apakah JID
+// ini sudah match seseorang yang terdaftar via LID-mapping bawaan Baileys.
+function normalisasiSenderUntukGrup(senderJid) {
+  if (!senderJid.endsWith('@lid')) return senderJid; // sudah bentuk normal
+  try {
+    const mapped = sock.signalRepository?.lidMapping?.getPNForLID?.(senderJid);
+    if (mapped) return mapped;
+  } catch (err) {
+    console.error('❌ Gagal resolve LID ke PN:', err.message);
+  }
+  console.log(`⚠️  Tidak bisa resolve ${senderJid} ke @s.whatsapp.net, dipakai apa adanya.`);
+  return senderJid;
+}
+
 // Cek apakah sebuah JID (format apapun: @s.whatsapp.net, @lid, dengan/tanpa :device)
 // adalah JID milik bot sendiri. Dipakai untuk deteksi mention/reply DAN untuk filter
 // bot keluar dari roster grup (supaya bot tidak ikut kehitung sebagai "anggota").
@@ -967,9 +1005,13 @@ async function handleIncomingGroupMessage(groupJid, senderJid, text, message) {
     return;
   }
 
-  tambahAnggotaGroup(groupJid, senderJid);
-  setGroupSosialJikaBelumAda(senderJid, groupJid);
-  await routeGroupMessage(groupJid, senderJid, text);
+  // Normalisasi senderJid juga di sini -- kalau WA kirim dalam bentuk @lid padahal
+  // orang ini sudah tercatat sebagai @s.whatsapp.net (dari roster/onboarding), JANGAN
+  // bikin entitas baru. Coba cari existing match dulu sebelum insert.
+  const senderJidTernormalisasi = await resolveSenderJidViaGroupMetadata(groupJid, senderJid);
+  tambahAnggotaGroup(groupJid, senderJidTernormalisasi);
+  setGroupSosialJikaBelumAda(senderJidTernormalisasi, groupJid);
+  await routeGroupMessage(groupJid, senderJidTernormalisasi, text);
 }
 async function routeGroupMessage(groupJid, senderJid, text) {
   const namaSender = getUserName(senderJid) || null;
