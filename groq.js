@@ -367,12 +367,16 @@ Balas HANYA dengan satu kata: L, P, atau TIDAK_JELAS.`;
  * Parse jawaban onboarding target kecepatan jadi '6' | '3' | '1' | 'TIDAK_JELAS' (§3 poin 4).
  */
 async function parseTargetDariJawaban(pesanUser) {
-  const prompt = `Seorang pengguna ditanya mau targetkan khatam 1 juz Al-Qur'an berapa hari, dengan 3 pilihan: 6 hari (santai), 3 hari (sedang), atau 1 hari (cepat). Dia menjawab:
+  const prompt = `Seorang pengguna ditanya mau targetkan khatam 1 juz Al-Qur'an berapa hari, dengan 3 pilihan dalam bentuk list bernomor:
+1. 6 hari (santai)
+2. 3 hari (sedang)
+3. 1 hari (cepat)
 
+Dia menjawab:
 "${pesanUser}"
 
-Klasifikasikan jawabannya ke SALAH SATU: 6, 3, 1, atau TIDAK_JELAS (kalau tidak bisa ditentukan angkanya).
-Balas HANYA dengan satu kata/angka itu saja.`;
+Dia bisa jawab pakai ANGKA PILIHAN (1/2/3 sesuai urutan list di atas) ATAU teks bebas (misal "santai", "yang cepat", "3 hari"). Klasifikasikan jawabannya ke SALAH SATU: 6, 3, 1, atau TIDAK_JELAS (kalau tidak bisa ditentukan).
+Balas HANYA dengan satu kata/angka itu saja (6, 3, 1, atau TIDAK_JELAS).`;
 
   const hasil = await callGroqText(prompt, 50);
   if (!hasil) return 'TIDAK_JELAS';
@@ -473,7 +477,7 @@ Extract SEBANYAK MUNGKIN field berikut KALAU disebutkan/tersirat jelas di pesan 
 - name: nama panggilan (rapikan Kapital Awal Kata)
 - location: kota/daerah domisili (rapikan Kapital Awal Kata)
 - gender: "L" (laki-laki/akhi) atau "P" (perempuan/ukhti)
-- target_juz_per_hari: "6", "3", atau "1" (hari per juz)
+- target_juz_per_hari: "6", "3", atau "1" (hari per juz). User bisa jawab dengan ANGKA PILIHAN (1/2/3, sesuai urutan list yang ditawarkan: 1="6", 2="3", 3="1") ATAU teks bebas (misal "santai"/"3 hari"/"yang cepat"). Petakan ke salah satu dari "6"/"3"/"1" sesuai maksudnya -- kalau jawabannya angka "1" artinya pilih opsi pertama (target "6"), angka "2" artinya opsi kedua (target "3"), angka "3" artinya opsi ketiga (target "1"). Kalau ambigu, null.
 - motivasi_personal: cerita singkat apa yang bikin semangat baca Qur'an (simpan apa adanya, lowercase oke)
 - mulai_surat: nama surat kalau user sebut mau mulai dari situ, null kalau "dari awal"/tidak disebut
 
@@ -528,7 +532,11 @@ ${fieldBaruTerisi.length > 0 ? `Info yang baru aja kamu dapet dari pesan itu: ${
 
 Yang masih perlu kamu tanyakan berikutnya: ${fieldBerikutnya}.
 
-Buatkan SATU balasan singkat (2-3 kalimat), ngobrol natural kayak temen kenalan -- KALAU ada info baru, respon dulu singkat (contoh: "wah dari Bandung ya" / "oke Rina, salam kenal!"), baru lanjut nanya hal berikutnya dengan santai, JANGAN kaku kayak form/kuesioner. Kalau field berikutnya soal target khatam, sebutkan 3 pilihannya (6/3/1 hari per juz) secara natural dalam kalimat, bukan bullet list.
+Buatkan SATU balasan singkat, ngobrol natural kayak temen kenalan -- KALAU ada info baru, respon dulu singkat (contoh: "wah dari Bandung ya" / "oke Rina, salam kenal!"), baru lanjut nanya hal berikutnya dengan santai, JANGAN kaku kayak form/kuesioner.
+KHUSUS kalau field berikutnya soal target khatam: tampilkan 3 pilihannya sebagai list bernomor (1, 2, 3) biar user bisa jawab pakai angka ATAU tulisannya bebas, format persis begini di akhir pesanmu:
+1. 6 hari (santai)
+2. 3 hari (sedang)
+3. 1 hari (cepat)
 Balas HANYA isi pesannya, tanpa tanda kutip.`;
 
   return await callGroqText(prompt, 300);

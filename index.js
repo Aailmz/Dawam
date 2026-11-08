@@ -142,7 +142,7 @@ const PESAN_TANYA_LOKASI_TEMPLATE = (nama) =>
   `Senang berkenalan denganmu, ${nama} 🤍 Kamu domisili di kota/daerah mana?`;
 const PESAN_TANYA_GENDER = 'Boleh tau, Dawam ngobrol sama Akhi atau Ukhti nih? 😊';
 const PESAN_TANYA_TARGET =
-  'Mau targetin khatam 1 juz berapa hari? 6 hari (santai), 3 hari (sedang), atau 1 hari (cepat)?';
+  'Mau targetin khatam 1 juz berapa hari? Pilih salah satu (boleh jawab angka atau tulisannya):\n1. 6 hari (santai)\n2. 3 hari (sedang)\n3. 1 hari (cepat)';
 const PESAN_TANYA_MOTIVASI =
   'Kalau suatu saat kamu lagi males/berat buat baca Qur\'an, apa yang biasanya bisa bikin kamu semangat lagi? 😊';
 
