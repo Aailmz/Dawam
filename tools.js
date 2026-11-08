@@ -137,21 +137,25 @@ const TOOLS_GRUP = [
     type: 'function',
     function: {
       name: 'tag_anggota_grup',
-      description: 'Kirim pesan ke grup yang nge-tag (mention) anggota tertentu berdasarkan kriteria APAPUN yang diminta user (belum aktivasi, belum baca hari ini, progress paling rendah/tinggi, nama spesifik, dll). WAJIB panggil get_rekap_progress_grup DULU untuk ambil data+jid semua anggota, pilih sendiri siapa yang cocok dengan kriteria yang diminta, baru panggil tool ini dengan jid mereka. JANGAN mengarang jid atau nama yang tidak ada di data.',
+      description: 'Kirim pesan ke grup yang nge-tag (mention) anggota berdasarkan KRITERIA yang sudah ditentukan (bukan milih manual). Filter siapa yang kena tag dihitung otomatis dari data asli, supaya tidak salah tag. Panggil kalau user minta tag/sebut anggota sesuai salah satu kriteria yang tersedia. Kalau user minta tag orang SPESIFIK by nama (misal "tag si Mirza"), pakai kriteria nama_spesifik dan isi nama_target.',
       parameters: {
         type: 'object',
         properties: {
-          jid_list: {
-            type: 'array',
-            items: { type: 'string' },
-            description: 'Daftar JID anggota yang mau ditag, diambil persis dari field "jid" pada data get_rekap_progress_grup.',
+          kriteria: {
+            type: 'string',
+            enum: ['belum_aktivasi', 'belum_baca_hari_ini', 'di_bawah_pace', 'nama_spesifik'],
+            description: 'belum_aktivasi: anggota yang belum pernah kirim "dawam" ke chat pribadi. belum_baca_hari_ini: sudah aktivasi tapi belum baca sama sekali hari ini. di_bawah_pace: sudah aktivasi dan statusnya di bawah target pace (hanya relevan buat yang punya target cepat). nama_spesifik: satu orang tertentu by nama, isi nama_target.',
+          },
+          nama_target: {
+            type: 'string',
+            description: 'WAJIB diisi kalau kriteria=nama_spesifik. Nama anggota yang dimaksud, apa adanya sesuai disebut user.',
           },
           pesan_pembuka: {
             type: 'string',
-            description: 'Kalimat singkat sebelum tag, sesuai konteks permintaan user (misal: "Yuk yang belum gabung, kirim dawam ke chat pribadi ya" atau "Reminder buat yang belum baca hari ini").',
+            description: 'Kalimat singkat sebelum tag, sesuai konteks permintaan user (misal: "Yuk yang belum gabung, kirim dawam ke chat pribadi ya").',
           },
         },
-        required: ['jid_list', 'pesan_pembuka'],
+        required: ['kriteria', 'pesan_pembuka'],
       },
     },
   },
@@ -315,17 +319,49 @@ async function eksekusiMintaRekapHarian(_, konteks) {
   };
 }
 
-async function eksekusiTagAnggotaGrup({ jid_list, pesan_pembuka }, konteks) {
-  if (!jid_list || jid_list.length === 0) {
-    return { sukses: false, pesan: 'Tidak ada anggota yang cocok untuk ditag berdasarkan kriteria ini.' };
+async function eksekusiTagAnggotaGrup({ kriteria, nama_target, pesan_pembuka }, konteks) {
+  const dataRekap = db.getRekapProgressGroup(konteks.groupJid);
+
+  let targetList;
+  switch (kriteria) {
+    case 'belum_aktivasi':
+      targetList = dataRekap.filter((d) => !d.sudah_aktivasi_personal);
+      break;
+    case 'belum_baca_hari_ini':
+      targetList = dataRekap.filter((d) => d.sudah_aktivasi_personal && !d.sudah_baca_hari_ini);
+      break;
+    case 'di_bawah_pace':
+      targetList = dataRekap.filter((d) => d.sudah_aktivasi_personal && d.status_pace === 'DI_BAWAH_PACE');
+      break;
+    case 'nama_spesifik': {
+      if (!nama_target) {
+        return { sukses: false, pesan: 'nama_target wajib diisi untuk kriteria nama_spesifik.' };
+      }
+      const namaLower = nama_target.trim().toLowerCase();
+      targetList = dataRekap.filter((d) => (d.nama || '').toLowerCase().includes(namaLower));
+      break;
+    }
+    default:
+      return { sukses: false, pesan: `Kriteria "${kriteria}" tidak dikenali.` };
   }
-  const terkirim = await konteks.kirimTagKeGrup(konteks.groupJid, pesan_pembuka, jid_list);
+
+  const jidList = targetList.map((d) => d.jid).filter(Boolean);
+
+  if (jidList.length === 0) {
+    return {
+      sukses: false,
+      pesan: `Tidak ada anggota yang cocok dengan kriteria "${kriteria}"${nama_target ? ` (nama: ${nama_target})` : ''}.`,
+    };
+  }
+
+  const terkirim = await konteks.kirimTagKeGrup(konteks.groupJid, pesan_pembuka, jidList);
   if (!terkirim) {
     return { sukses: false, pesan: 'Gagal mengirim tag ke grup.' };
   }
   return {
     sukses: true,
-    jumlah_ditag: jid_list.length,
+    jumlah_ditag: jidList.length,
+    nama_yang_ditag: targetList.map((d) => d.nama),
     catatan_untuk_ai: 'Pesan tag sudah terkirim sebagai pesan terpisah. Balas singkat saja, JANGAN mengulang isi pesan/nama yang ditag.',
   };
 }
