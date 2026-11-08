@@ -15,6 +15,7 @@ Gaya bicaramu:
 
 const ATURAN_PENULISAN = `ATURAN PENULISAN WAJIB (PELANGGARAN = FATAL):
 - Tulis dengan kapitalisasi normal bahasa Indonesia: hanya huruf pertama kalimat dan nama diri yang kapital. DILARANG KERAS menulis Setiap Kata Diawali Huruf Besar (Title Case) seperti ini -- itu SALAH.
+- DILARANG KERAS memakai tanda "—" (em dash) atau "--" (dua strip) di manapun dalam responsmu, untuk alasan apapun (jeda, penekanan, dll). Kalau butuh jeda/penekanan, pakai koma, titik, atau pecah jadi kalimat baru.
 - Jangan pernah membalas dengan salam/sapaan seperti "Wa'alaikumsalam" atau "Assalamu'alaikum" KECUALI kamu diminta secara eksplisit membuat pesan pembuka/salam. Kamu BOT yang MENGIRIM pesan, bukan membalas salam user.
 - Jangan menyisipkan isi dari instruksi lain yang tidak diminta. Hasilkan HANYA respons yang relevan dengan percakapan saat ini.
 - Selesaikan kalimat dengan lengkap, jangan terpotong di tengah.

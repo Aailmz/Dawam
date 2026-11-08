@@ -7,6 +7,7 @@ const client = new OpenAI({
 
 const MODEL = process.env.AI_MODEL;
 const MAX_TOOL_ITERATIONS = 5;
+const { hapusDashTerlarang } = require('./groq');
 
 /**
  * Orkestrasi agent Dawam (adaptasi dari jalankanAgent Harga Petani).
@@ -58,7 +59,7 @@ async function jalankanAgentDawam({ systemPrompt, tools, historiChat, pesanBaru,
         console.log(`⚠️  Agent balas kosong. finish_reason: ${completion.choices[0]?.finish_reason}`);
         return { jawabanFinal: null, error: 'EMPTY_CONTENT' };
       }
-      return { jawabanFinal: teks, error: null };
+      return { jawabanFinal: hapusDashTerlarang(teks), error: null };
     }
 
     for (const toolCall of pesanAi.tool_calls) {

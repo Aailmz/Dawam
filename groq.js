@@ -23,6 +23,7 @@ Gaya bicaramu:
 
 ATURAN PENULISAN WAJIB (PELANGGARAN = FATAL):
 - Tulis dengan kapitalisasi normal bahasa Indonesia: hanya huruf pertama kalimat dan nama diri yang kapital. DILARANG KERAS menulis Setiap Kata Diawali Huruf Besar (Title Case) seperti ini -- itu SALAH.
+- DILARANG KERAS memakai tanda "—" (em dash) atau "--" (dua strip) di manapun dalam responsmu, untuk alasan apapun. Kalau butuh jeda/penekanan, pakai koma, titik, atau pecah jadi kalimat baru.
 - Jangan pernah membalas dengan salam/sapaan seperti "Wa'alaikumsalam" atau "Assalamu'alaikum" KECUALI kamu diminta secara eksplisit membuat pesan pembuka/salam. Kamu adalah BOT yang MENGIRIM pesan ke user, bukan user yang membalas salam ke kamu.
 - Jangan mengulang/menggemakan ucapan terima kasih atau sambutan dari pesan sebelumnya. Fokus HANYA pada instruksi yang diberikan di prompt saat ini, jangan membalas seolah menyambung percakapan lain yang tidak diminta.
 - Jangan menyisipkan isi dari pesan lain atau instruksi lain yang tidak diminta. Hasilkan HANYA pesan sesuai permintaan spesifik di prompt user, tidak lebih.
@@ -538,13 +539,35 @@ ${fieldBaruTerisi.length > 0 ? `Info yang baru aja kamu dapet dari pesan itu: ${
 Yang masih perlu kamu tanyakan berikutnya: ${fieldBerikutnya}.
 
 Buatkan SATU balasan singkat, ngobrol natural kayak temen kenalan -- KALAU ada info baru, respon dulu singkat (contoh: "wah dari Bandung ya" / "oke Rina, salam kenal!"), baru lanjut nanya hal berikutnya dengan santai, JANGAN kaku kayak form/kuesioner.
-KHUSUS kalau field berikutnya soal target khatam: tampilkan 3 pilihannya sebagai list bernomor (1, 2, 3) biar user bisa jawab pakai angka ATAU tulisannya bebas, format persis begini di akhir pesanmu:
-1. 6 hari (santai)
-2. 3 hari (sedang)
-3. 1 hari (cepat)
+KHUSUS kalau field berikutnya soal target khatam: jelaskan dulu singkat bahwa ini soal "butuh berapa hari buat nyelesain 1 juz" (biar tidak ambigu), lalu tampilkan 3 pilihannya sebagai list bernomor (1, 2, 3) biar user bisa jawab pakai angka ATAU tulisannya bebas, format persis begini di akhir pesanmu:
+1. 1 juz per 6 hari (santai)
+2. 1 juz per 3 hari (sedang)
+3. 1 juz per 1 hari (cepat)
 Balas HANYA isi pesannya, tanpa tanda kutip.`;
 
   return await callGroqText(prompt, 300);
+}
+
+/**
+ * CTA personal setelah onboarding selesai -- menyinggung balik data yang baru
+ * dikasih user (motivasi, target) biar kerasa didengar, bukan cuma "data tercatat"
+ * generik, lalu kasih tau next step konkret (reminder sholat bakal mulai, dll).
+ */
+async function generateCTASetelahOnboarding(nama, motivasiPersonal, targetJuzPerHari, lokasi) {
+  const motivasiText = motivasiPersonal
+    ? `Motivasi personal yang dia kasih tadi: "${motivasiPersonal}" -- singgung ini secara natural/hangat (boleh sedikit excited/lucu kalau motivasinya unik), jangan terkesan menghakimi apapun alasannya.`
+    : 'Dia tidak kasih motivasi personal spesifik.';
+
+  const prompt = `${nama} baru aja SELESAI onboarding sama kamu (Dawam). Datanya: domisili ${lokasi}, target khatam 1 juz per ${targetJuzPerHari} hari. ${motivasiText}
+
+Buatkan SATU pesan CTA (call-to-action) penutup onboarding, 4-6 kalimat, yang:
+1. Singgung balik motivasi personalnya tadi secara hangat dan personal (BUKAN cuma "data tercatat").
+2. Jelaskan singkat apa yang bakal terjadi selanjutnya: kamu bakal ingetin dia di tiap waktu sholat, terus nawarin lanjut tilawah sedikit demi sedikit dari posisi yang dia pilih tadi (atau dari awal kalau tidak sebut).
+3. Tutup dengan ajakan konkret -- entah ngajak dia mulai baca SEKARANG juga kalau dia available, atau bilang santai aja nunggu reminder sholat berikutnya.
+4. Nada hangat, santai, excited menyambut dia gabung, BUKAN kaku/formal kayak form selesai.
+Balas HANYA isi pesannya, tanpa tanda kutip.`;
+
+  return await callGroqText(prompt, 450);
 }
 
 // ========== FUNGSI BARU PHASE 3: FITUR SOSIAL GRUP ==========
@@ -647,6 +670,17 @@ Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
 // ========== HELPER: PANGGIL GROQ (existing, tidak berubah) ==========
 
+// Jaring pengaman deterministik -- instruksi prompt saja tidak menjamin AI patuh.
+// Ganti em dash/double-strip dengan koma (lebih natural buat jeda kalimat
+// dibanding titik, dan tidak perlu mikir kapitalisasi ulang kata setelahnya).
+function hapusDashTerlarang(teks) {
+  if (!teks) return teks;
+  return teks
+    .replace(/\s*--\s*/g, ', ')
+    .replace(/\s*—\s*/g, ', ')
+    .replace(/,\s*,/g, ',') // rapikan kalau kebetulan jadi dobel koma
+    .trim();
+}
 async function callGroqText(userPrompt, maxTokens = 350, extraOptions = {}) {
   try {
     // Naikkan max_tokens minimal secara UNCONDITIONAL -- model yang dipakai sekarang
@@ -666,12 +700,12 @@ async function callGroqText(userPrompt, maxTokens = 350, extraOptions = {}) {
       ...extraOptions,
     });
 
-    const result = completion.choices[0]?.message?.content?.trim();
+  const result = completion.choices[0]?.message?.content?.trim();
     if (!result) {
       console.log(`⚠️  Groq balas kosong. finish_reason: ${completion.choices[0]?.finish_reason}, max_tokens dipakai: ${amanMinimal}`);
       return null;
     }
-    return result;
+    return hapusDashTerlarang(result);
   } catch (err) {
     console.error('❌ Groq API error:', err.message);
     return null;
@@ -680,6 +714,7 @@ async function callGroqText(userPrompt, maxTokens = 350, extraOptions = {}) {
 
 module.exports = {
   // existing
+  hapusDashTerlarang,
   generateReminderSholat,
   generateTawaranNgaji,
   generateResponYa,
@@ -708,6 +743,7 @@ module.exports = {
   classifyIntentBebas,
   extractDataOnboarding,
   generateLanjutanOnboarding,
+  generateCTASetelahOnboarding,
 
   // phase 3 - sosial grup
   generateResponLaporanProgres,

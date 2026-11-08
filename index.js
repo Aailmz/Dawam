@@ -142,7 +142,7 @@ const PESAN_TANYA_LOKASI_TEMPLATE = (nama) =>
   `Senang berkenalan denganmu, ${nama} 🤍 Kamu domisili di kota/daerah mana?`;
 const PESAN_TANYA_GENDER = 'Boleh tau, Dawam ngobrol sama Akhi atau Ukhti nih? 😊';
 const PESAN_TANYA_TARGET =
-  'Mau targetin khatam 1 juz berapa hari? Pilih salah satu (boleh jawab angka atau tulisannya):\n1. 6 hari (santai)\n2. 3 hari (sedang)\n3. 1 hari (cepat)';
+  'Mau atur tempo baca Qur\'an-nya gimana? Ini maksudnya "butuh berapa hari buat nyelesain 1 juz". Pilih salah satu (boleh jawab angka atau tulisannya):\n1. 1 juz per 6 hari (santai)\n2. 1 juz per 3 hari (sedang)\n3. 1 juz per 1 hari (cepat)';
 const PESAN_TANYA_MOTIVASI =
   'Kalau suatu saat kamu lagi males/berat buat baca Qur\'an, apa yang biasanya bisa bikin kamu semangat lagi? 😊';
 
@@ -457,7 +457,12 @@ async function handleOnboardingTurn(jid, text) {
 async function selesaikanOnboarding(jid, nama, lokasi, target) {
   setUserState(jid, 'IDLE');
   await kirimPesan(jid, PESAN_ONBOARDING_SELESAI_TEMPLATE(nama, lokasi, target));
-  await kirimPesan(jid, PESAN_PERKENALAN_PERAN, 1500);
+
+  const user = getUser(jid);
+  let pesanCTA = await groqAI.generateCTASetelahOnboarding(nama, user.motivasi_personal, target, lokasi);
+  if (!pesanCTA) pesanCTA = PESAN_PERKENALAN_PERAN; // fallback kalau AI gagal
+
+  await kirimPesan(jid, pesanCTA, 1500);
   console.log(`✅ Onboarding selesai untuk ${jid}.`);
 }
 
