@@ -77,11 +77,11 @@ const INTERVAL_CRON_MOTIVASI_GROUP = '0 16 * * 5'; // tiap Jumat jam 16:00, ajak
 const INTERVAL_CRON_REKAP_HARIAN = '0 20 * * *'; // tiap hari jam 20:00, rekap progress ke grup aktif
 
 const JADWAL_SHOLAT = {
-  subuh: { jam: 4, menit: 20 },
-  dzuhur: { jam: 11, menit: 44 },
-  ashar: { jam: 14, menit: 47 },
-  maghrib: { jam: 17, menit: 49 },
-  isya: { jam: 18, menit: 55 },
+  subuh: { jam: 4, menit: 5 },
+  dzuhur: { jam: 11, menit: 40 },
+  ashar: { jam: 14, menit: 58 },
+  maghrib: { jam: 17, menit: 50 },
+  isya: { jam: 19, menit: 0 },
 };
 
 let BOT_PN_NORMALIZED = null;  // nomor HP bot (format lama, @s.whatsapp.net)
