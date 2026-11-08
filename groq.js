@@ -555,19 +555,15 @@ Balas HANYA isi pesannya, tanpa tanda kutip.`;
  */
 async function generateCTASetelahOnboarding(nama, motivasiPersonal, targetJuzPerHari, lokasi) {
   const motivasiText = motivasiPersonal
-    ? `Motivasi personal yang dia kasih tadi: "${motivasiPersonal}" -- singgung ini secara natural/hangat (boleh sedikit excited/lucu kalau motivasinya unik), jangan terkesan menghakimi apapun alasannya.`
+    ? `Motivasi personal yang dia kasih tadi: "${motivasiPersonal}".`
     : 'Dia tidak kasih motivasi personal spesifik.';
 
-  const prompt = `${nama} baru aja SELESAI onboarding sama kamu (Dawam). Datanya: domisili ${lokasi}, target khatam 1 juz per ${targetJuzPerHari} hari. ${motivasiText}
+  const prompt = `${nama} baru aja SELESAI onboarding dan baru dikasih penjelasan soal cara kerja Dawam (reminder sholat + ajakan tilawah). Datanya: domisili ${lokasi}, target khatam 1 juz per ${targetJuzPerHari} hari. ${motivasiText}
 
-Buatkan SATU pesan CTA (call-to-action) penutup onboarding, 4-6 kalimat, yang:
-1. Singgung balik motivasi personalnya tadi secara hangat dan personal (BUKAN cuma "data tercatat").
-2. Jelaskan singkat apa yang bakal terjadi selanjutnya: kamu bakal ingetin dia di tiap waktu sholat, terus nawarin lanjut tilawah sedikit demi sedikit dari posisi yang dia pilih tadi (atau dari awal kalau tidak sebut).
-3. Tutup dengan ajakan konkret -- entah ngajak dia mulai baca SEKARANG juga kalau dia available, atau bilang santai aja nunggu reminder sholat berikutnya.
-4. Nada hangat, santai, excited menyambut dia gabung, BUKAN kaku/formal kayak form selesai.
+Buatkan SATU pesan PENDEK (1-2 kalimat saja, BUKAN paragraf panjang) berupa PERTANYAAN RINGAN buat lebih kenal PERSONA/KEBIASAAN dia (BUKAN soal tilawah/ajakan baca sekarang, itu sudah dibahas di pesan sebelumnya). Contoh arah pertanyaan: kebiasaan baca Qur'an-nya selama ini gimana, lebih nyaman baca pagi/malam, atau sekadar nanya kabar/kesibukannya sekarang. Nada hangat, ringan, kayak nanya temen baru kenal, BUKAN kaku/formal, dan JANGAN menyinggung soal mulai baca/tilawah sekarang.
 Balas HANYA isi pesannya, tanpa tanda kutip.`;
 
-  return await callGroqText(prompt, 450);
+  return await callGroqText(prompt, 300);
 }
 
 // ========== FUNGSI BARU PHASE 3: FITUR SOSIAL GRUP ==========

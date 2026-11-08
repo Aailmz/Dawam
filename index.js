@@ -131,7 +131,7 @@ const PESAN_TIDAK_DIMENGERTI =
   'Maaf, Dawam belum paham maksudnya 🙏 Balas dengan *"ya"* atau *"nanti"* ya, Sahabat.';
 
 const PESAN_SELAMAT_DATANG =
-  'Assalamu\'alaikum warahmatullahi wabarakatuh 🌙\n\nSelamat datang di *Dawam* — teman harianmu untuk istiqomah shalat dan tilawah Al-Qur\'an.\n\nMulai sekarang, Dawam akan mengingatkanmu di setiap waktu shalat dan menemanimu tilawah sedikit demi sedikit, tanpa beban.\n\n"Sebaik-baik amalan di sisi Allah adalah yang dikerjakan secara terus-menerus (dawam), walaupun sedikit." (HR. Bukhari & Muslim)\n\nBarakallahu fiik, Sahabat Dawam 🤍';
+  'Assalamu\'alaikum warahmatullahi wabarakatuh 🌙\n\nSelamat datang di *Dawam*, teman harianmu untuk istiqomah shalat dan tilawah Al-Qur\'an.\n\nMulai sekarang, Dawam akan mengingatkanmu di setiap waktu shalat dan menemanimu tilawah sedikit demi sedikit, tanpa beban.\n\n"Sebaik-baik amalan di sisi Allah adalah yang dikerjakan secara terus-menerus (dawam), walaupun sedikit." (HR. Bukhari & Muslim)\n\nBarakallahu fiik, Sahabat Dawam 🤍';
 
 const PESAN_PEMBUKA_ONBOARDING =
   'Sebelum lanjut, kenalan dulu yuk 😊 Nama panggilannya siapa, dan domisili di mana?';
@@ -150,7 +150,7 @@ const PESAN_ONBOARDING_SELESAI_TEMPLATE = (nama, lokasi, target) =>
   `Siap, ${nama}! Dawam sudah catat domisilimu di ${lokasi}, dengan target khatam 1 juz per ${target} hari 📍`;
 
 const PESAN_PERKENALAN_PERAN =
-  'Sedikit cerita soal Dawam ya 🤍\n\nSetiap hari, aku bakal ingetin kamu pas waktu shalat tiba — nggak lama-lama, cuma pengingat sederhana biar nggak kelewat.\n\nSelepas itu, aku juga bakal nanya apakah kamu mau lanjut tilawah sedikit. Nggak ada paksaan — kalau lagi sibuk atau belum sempat, bilang aja "nanti", aku nggak akan maksa 😊\n\nKalau kamu bilang mau, aku kirimin bacaan lanjutannya, dari halaman terakhir yang udah kamu baca. Pelan-pelan aja, yang penting konsisten.\n\nOh iya, kamu juga bisa nanya aku kapan aja kok -- soal progress bacaanmu, mau lanjut baca, atau sekadar cerita. Yuk kita mulai perjalanan ini bareng-bareng, semoga Allah mudahkan 🌙';
+  'Sedikit cerita soal Dawam ya 🤍\n\nSetiap hari, aku bakal ingetin kamu pas waktu shalat tiba. Nggak lama-lama, cuma pengingat sederhana biar nggak kelewat.\n\nSelepas itu, aku juga bakal nanya apakah kamu mau lanjut tilawah sedikit. Nggak ada paksaan, kalau lagi sibuk atau belum sempat, bilang aja "nanti", aku nggak akan maksa 😊\n\nKalau kamu bilang mau, aku kirimin bacaan lanjutannya, dari halaman terakhir yang udah kamu baca. Pelan-pelan aja, yang penting konsisten.\n\nOh iya, kamu juga bisa nanya aku kapan aja kok -- soal progress bacaanmu, mau lanjut baca, atau sekadar cerita. Yuk kita mulai perjalanan ini bareng-bareng, semoga Allah mudahkan 🌙';
 
 const KEYWORD_AKTIVASI = 'dawam';
 
@@ -457,10 +457,11 @@ async function handleOnboardingTurn(jid, text) {
 async function selesaikanOnboarding(jid, nama, lokasi, target) {
   setUserState(jid, 'IDLE');
   await kirimPesan(jid, PESAN_ONBOARDING_SELESAI_TEMPLATE(nama, lokasi, target));
+  await kirimPesan(jid, PESAN_PERKENALAN_PERAN, 1500);
 
   const user = getUser(jid);
   let pesanCTA = await groqAI.generateCTASetelahOnboarding(nama, user.motivasi_personal, target, lokasi);
-  if (!pesanCTA) pesanCTA = PESAN_PERKENALAN_PERAN; // fallback kalau AI gagal
+  if (!pesanCTA) pesanCTA = `Btw ${nama}, selama ini biasanya lebih nyaman baca Qur'an di waktu apa?`;
 
   await kirimPesan(jid, pesanCTA, 1500);
   console.log(`✅ Onboarding selesai untuk ${jid}.`);
@@ -1078,7 +1079,7 @@ function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
   }
 
   if (belumAktif.length > 0) {
-    teks += `⏳ Ada ${belumAktif.length} anggota yang belum aktivasi personal — kirim "dawam" ke chat pribadi biar progressnya ikut tercatat.\n\n`;
+    teks += `⏳ Ada ${belumAktif.length} anggota yang belum aktivasi personal, kirim "dawam" ke chat pribadi biar progressnya ikut tercatat.\n\n`;
   }
 
   let jidUntukMention = [];
