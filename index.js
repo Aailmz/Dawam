@@ -30,6 +30,7 @@ const {
   setTanggalMulaiBaca,
   setStartBacaanId,
   setTanggalTerakhirBaca,
+  sudahKhatamSetelahWrap,
   incrementNoResponse,
   resetNoResponse,
   setModeArabSaja,
@@ -594,9 +595,15 @@ async function kirimBacaanArab(jid) {
     return kirimBacaanTerjemahSaja(jid);
   }
 
-  let nextId = user.last_sent_bacaan_id + 1;
+  const idSebelumWrap = user.last_sent_bacaan_id + 1;
+  let nextId = idSebelumWrap;
   if (nextId > 900) {
     nextId = 1;
+  }
+
+  const startBacaanId = user.start_bacaan_id || 0;
+  if (sudahKhatamSetelahWrap(startBacaanId, idSebelumWrap, nextId)) {
+    setStartBacaanId(jid, nextId - 1 < 0 ? 900 : nextId - 1);
   }
 
   const bacaan = getBacaanById(nextId);
@@ -702,8 +709,17 @@ function buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, target, selisih
 
 async function kirimBacaanLanjutanUntukAgent(jid) {
   const user = getUser(jid);
-  let nextId = user.last_sent_bacaan_id + 1;
+  const idSebelumWrap = user.last_sent_bacaan_id + 1;
+  let nextId = idSebelumWrap;
   if (nextId > 900) nextId = 1;
+
+  const startBacaanId = user.start_bacaan_id || 0;
+  const barusanKhatam = sudahKhatamSetelahWrap(startBacaanId, idSebelumWrap, nextId);
+  if (barusanKhatam) {
+    // Muter balik ke titik start -- anggap khatam, reset start supaya putaran
+    // berikutnya dihitung dari sini lagi (bukan dari id lama yang sudah terlewati).
+    setStartBacaanId(jid, nextId - 1 < 0 ? 900 : nextId - 1);
+  }
 
   const bacaan = getBacaanById(nextId);
   if (!bacaan) {
@@ -746,7 +762,10 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
     surat_ayat: bacaan.surat_ayat,
     juz: bacaan.juz,
     jenis_dikirim: jenisDikirim,
-    catatan_untuk_ai: buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihTampilan),
+    barusan_khatam: barusanKhatam,
+    catatan_untuk_ai: barusanKhatam
+      ? `User BARU SAJA KHATAM! Muter penuh dari titik mulainya dan sekarang kembali ke sana. Ucapkan selamat/apresiasi besar atas pencapaian khatamnya dengan hangat, sebelum lanjut ke catatan progress biasa berikut: ${buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihTampilan)}`
+      : buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihTampilan),
   };
 }
 

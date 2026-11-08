@@ -283,7 +283,7 @@ function setGroupSosialJikaBelumAda(jid, groupJid) {
 
 // ========== ONBOARDING CONVERSATIONAL (phase 2) ==========
 
-const FIELD_ONBOARDING_WAJIB = ['name', 'location', 'gender', 'target_juz_per_hari', 'motivasi_personal'];
+const FIELD_ONBOARDING_WAJIB = ['name', 'location', 'gender', 'target_juz_per_hari', 'motivasi_personal', 'mulai_surat'];
 // mulai_surat sengaja TIDAK wajib -- kalau kosong, default mulai dari awal.
 
 function getFieldOnboardingKosong(jid) {
@@ -332,6 +332,28 @@ function formatSelisihUntukTampilan(selisihHalamanAbs) {
   return { satuan: 'juz', nilai: juz };
 }
 
+// Hitung halaman yang sudah ditempuh dari titik start, MEMPERHITUNGKAN wraparound.
+// Kalau posisi sekarang masih di depan start (belum pernah wrap), ini sama kayak
+// pengurangan biasa. Tapi kalau user udah lewat id 900 dan muter balik ke id kecil
+// (misal start di juz 30 ~id870, sekarang udah di id50 lagi), pengurangan biasa
+// bakal jadi negatif/salah -- padahal user udah baca (900-870)+50 halaman.
+function hitungHalamanDitempuhDenganWrap(startBacaanId, posisiSekarangId) {
+  if (posisiSekarangId >= startBacaanId) {
+    return posisiSekarangId - startBacaanId;
+  }
+  return (TOTAL_HALAMAN_KESELURUHAN - startBacaanId) + posisiSekarangId;
+}
+
+// Cek apakah user sudah khatam (muter penuh kembali ke/lewat titik start-nya sendiri).
+// targetNextId = id yang AKAN dikirim berikutnya (sebelum wrap-check di pemanggil).
+function sudahKhatamSetelahWrap(startBacaanId, idSebelumWrap, idSetelahWrap) {
+  // Khatam terjadi kalau pengiriman kali ini melewati batas 900->1 (ada wrap)
+  // DAN titik setelah wrap sudah mencapai/melewati start point.
+  const adaWrap = idSebelumWrap > idSetelahWrap;
+  if (!adaWrap) return false;
+  return idSetelahWrap >= startBacaanId;
+}
+
 // Basis perhitungan: JARAK YANG SUDAH DITEMPUH dari titik mulai (start_bacaan_id),
 // BUKAN posisi absolut di buku. User bisa mulai dari surat manapun (tidak selalu
 // Al-Fatihah) -- posisi tinggi tidak berarti progress besar kalau start-nya juga tinggi.
@@ -341,7 +363,7 @@ function hitungSisaProgressUser(jid) {
   const juzSekarang = bacaan?.juz ?? null;
   const posisiSekarang = user.last_sent_bacaan_id || 0;
   const startBacaanId = user.start_bacaan_id || 0;
-  const halamanDitempuh = Math.max(0, posisiSekarang - startBacaanId);
+  const halamanDitempuh = hitungHalamanDitempuhDenganWrap(startBacaanId, posisiSekarang);
 
   const hariIniISOAwal = new Date().toISOString().slice(0, 10);
   if (!user.target_juz_per_hari || user.target_juz_per_hari === '6' || !user.tanggal_mulai_baca) {
@@ -582,6 +604,8 @@ module.exports = {
   updateUserFields,
   hitungHariBerjalanUser,
   hitungSisaProgressUser,
+  hitungHalamanDitempuhDenganWrap,
+  sudahKhatamSetelahWrap,
 
   // groups - phase 3 (sosial)
   getOrCreateGroup,

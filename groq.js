@@ -481,7 +481,7 @@ Extract SEBANYAK MUNGKIN field berikut KALAU disebutkan/tersirat jelas di pesan 
 - target_juz_per_hari: "6", "3", atau "1". PENTING soal satuan: angka ini artinya "1 JUZ PER BERAPA HARI", BUKAN jumlah juz per hari dan BUKAN total hari khatam keseluruhan. Jadi "6" = santai = butuh 6 hari untuk menyelesaikan 1 juz (paling lambat). "3" = sedang = 1 juz per 3 hari. "1" = cepat = 1 juz per hari (tercepat). Semakin BESAR angkanya, semakin SANTAI/LAMBAT temponya -- JANGAN disalahartikan jadi "semakin besar = semakin rajin/banyak juz per hari", itu TERBALIK.
   User bisa jawab dengan ANGKA PILIHAN (1/2/3, sesuai urutan list yang ditawarkan: pilihan 1="6", pilihan 2="3", pilihan 3="1") ATAU teks bebas (misal "santai"/"3 hari"/"yang cepat"). Petakan ke salah satu dari "6"/"3"/"1" sesuai maksudnya -- kalau jawabannya angka pilihan "1" artinya target "6", angka pilihan "2" artinya target "3", angka pilihan "3" artinya target "1". Kalau ambigu, null.
 - motivasi_personal: cerita singkat apa yang bikin semangat baca Qur'an (simpan apa adanya, lowercase oke)
-- mulai_surat: nama surat kalau user sebut mau mulai dari situ, null kalau "dari awal"/tidak disebut
+- mulai_surat: nama surat kalau user sebut mau mulai dari situ ATAU string "dari awal" kalau user eksplisit bilang mau mulai dari Al-Fatihah/dari awal/tidak masalah dimulai darimana. HANYA null kalau pertanyaan ini belum terjawab sama sekali di pesan ini.
 
 Field yang TIDAK disebutkan di pesan ini -> null. Balas JSON:
 {"name": null, "location": null, "gender": null, "target_juz_per_hari": null, "motivasi_personal": null, "mulai_surat": null}`;
