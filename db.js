@@ -82,6 +82,26 @@ db.exec(`
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_history_chat ON chat_history (chat_jid, id)`);
 
+
+// Log harian per-user, SATU baris per hari per user (upsert), dipakai untuk:
+// - jawab "kemarin baca apa" / histori yang bisa ditanya balik (bukan cuma posisi terakhir)
+// - basis agregat rekap mingguan
+// - deteksi siapa yang DI_BAWAH_PACE pas Isya (poin 1 lelang)
+db.exec(`
+  CREATE TABLE IF NOT EXISTS log_bacaan_harian (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_jid TEXT NOT NULL,
+    tanggal TEXT NOT NULL,              -- YYYY-MM-DD
+    bacaan_id_awal INTEGER,             -- id bacaan pertama yang dikirim hari itu
+    bacaan_id_akhir INTEGER,            -- id bacaan terakhir yang dikirim hari itu
+    surat_ayat_akhir TEXT,              -- label terakhir hari itu, buat ditampilkan tanpa join lagi
+    jumlah_kartu INTEGER DEFAULT 0,     -- berapa kartu dikirim hari itu
+    status_pace_akhir TEXT,             -- snapshot status pace di akhir hari itu (boleh null)
+    UNIQUE(user_jid, tanggal)
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_log_bacaan_user_tgl ON log_bacaan_harian (user_jid, tanggal)`);
+
 // Migrasi: tabel 'ayat' (generic image, Phase 1) sudah digantikan tabel 'bacaan'.
 const tabelLamaMasihAda = db
   .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='ayat'`)
@@ -116,6 +136,9 @@ tambahKolomJikaBelumAda('users', 'group_sosial_jid', 'TEXT');
 tambahKolomJikaBelumAda('users', 'sudah_lapor_sesi_ini', 'INTEGER DEFAULT 0');
 tambahKolomJikaBelumAda('users', 'start_bacaan_id', 'INTEGER DEFAULT 0');
 tambahKolomJikaBelumAda('users', 'tanggal_terakhir_baca', 'TEXT');
+// Posisi kedua khusus Jumat Al-Kahfi (poin 3), independen dari last_sent_bacaan_id utama.
+tambahKolomJikaBelumAda('users', 'last_sent_alkahfi_id', 'INTEGER DEFAULT 0');
+tambahKolomJikaBelumAda('users', 'tanggal_terakhir_alkahfi', 'TEXT');
 
 // ========== BACAAN ==========
 
@@ -285,6 +308,16 @@ function setGroupSosialJikaBelumAda(jid, groupJid) {
 
 const FIELD_ONBOARDING_WAJIB = ['name', 'location', 'gender', 'target_juz_per_hari', 'motivasi_personal', 'mulai_surat'];
 // mulai_surat sengaja TIDAK wajib -- kalau kosong, default mulai dari awal.
+
+
+// Satu-satunya sumber kebenaran untuk opsi target yang valid -- dipakai di tools.js,
+// groq.js (prompt extractDataOnboarding/parseTargetDariJawaban), dan index.js (fallback teks).
+// JANGAN hardcode ulang list ini di tempat lain.
+const OPSI_TARGET_VALID = ['12', '6', '3', '1'];
+
+function isTargetValid(target) {
+  return OPSI_TARGET_VALID.includes(target);
+}
 
 function getFieldOnboardingKosong(jid) {
   const user = getUser(jid);
@@ -599,6 +632,8 @@ module.exports = {
 
   // onboarding conversational
   FIELD_ONBOARDING_WAJIB,
+  OPSI_TARGET_VALID,
+  isTargetValid,
   getFieldOnboardingKosong,
   isOnboardingLengkap,
   updateUserFields,
@@ -621,7 +656,18 @@ module.exports = {
   getRekapProgressGroup,
   cariGroupUntukUserDariRoster,
 
-  // chat history (untuk agent)
+    // chat history (untuk agent)
   simpanChatHistory,
   getChatHistory,
+
+  // log bacaan harian (lelang + rekap mingguan)
+  catatLogBacaanHarian,
+  getLogBacaanHarianByTanggal,
+  getLogBacaanHarianRange,
+  getAnggotaDiBawahPaceHariIni,
+
+  // Jumat Al-Kahfi
+  getBacaanAlkahfiById,
+  updateLastSentAlkahfiId,
+  setTanggalTerakhirAlkahfi,
 };
