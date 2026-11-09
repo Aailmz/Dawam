@@ -61,8 +61,8 @@ const TOOLS_PERSONAL = [
         properties: {
           target_juz_per_hari: {
             type: 'string',
-            enum: ['6', '3', '1'],
-            description: 'Target baru: khatam 1 juz per berapa hari.',
+            enum: ['12', '6', '3', '1'],
+            description: 'Target baru: khatam 1 juz per berapa hari. HANYA salah satu dari 4 nilai ini -- kalau user menyebut angka lain atau maksudnya ambigu, JANGAN panggil tool ini, tanyakan balik dulu ke user dengan menyebutkan ulang 4 pilihan yang ada.',
           },
           motivasi_personal: {
             type: 'string',
@@ -108,6 +108,24 @@ const TOOLS_PERSONAL = [
           },
         },
         required: ['isi_pesan'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'tanya_bacaan_hari_lain',
+      description: 'Ambil histori bacaan user di tanggal tertentu (bukan hari ini), misal user tanya "kemarin aku baca apa" atau "hari senin kemarin sampe mana". JANGAN mengarang, selalu panggil tool ini kalau user tanya soal bacaan hari-hari sebelumnya.',
+      parameters: {
+        type: 'object',
+        properties: {
+          tanggal_relatif: {
+            type: 'string',
+            enum: ['kemarin', 'dua_hari_lalu', 'tiga_hari_lalu'],
+            description: 'Posisi hari yang dimaksud relatif terhadap hari ini.',
+          },
+        },
+        required: ['tanggal_relatif'],
       },
     },
   },
@@ -165,6 +183,23 @@ const TOOLS_GRUP = [
       name: 'set_grup_sosial_ini',
       description: 'Jadikan grup ini sebagai grup sosial resmi pengirim pesan (tempat lapor progress & broadcast). Panggil kalau user eksplisit minta menghubungkan/memindahkan dirinya ke grup ini.',
       parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'klaim_card_kawan',
+      description: 'Panggil kalau seseorang di grup bilang mau baca/klaim card lanjutan milik anggota lain yang sedang ditawarkan (konteks lelang Isya), misal "aku baca punya si A ya" atau "gas punya Fulan". Card akan dikirim PERSONAL ke orang yang klaim (bukan ke grup). Panggil HANYA kalau ada nama target yang jelas disebut dan sedang dalam konteks tawaran lelang yang masih berlaku.',
+      parameters: {
+        type: 'object',
+        properties: {
+          nama_target: {
+            type: 'string',
+            description: 'Nama anggota yang card-nya mau diklaim/dibaca, sesuai disebut user.',
+          },
+        },
+        required: ['nama_target'],
+      },
     },
   },
 ];
@@ -259,6 +294,31 @@ async function eksekusiSetPosisiBacaan({ nama_surat }, konteks) {
   };
 }
 
+async function eksekusiTanyaBacaanHariLain({ tanggal_relatif }, konteks) {
+  const mapHari = { kemarin: 1, dua_hari_lalu: 2, tiga_hari_lalu: 3 };
+  const mundur = mapHari[tanggal_relatif] || 1;
+  const tanggal = new Date();
+  tanggal.setDate(tanggal.getDate() - mundur);
+  const tanggalISO = tanggal.toISOString().slice(0, 10);
+
+  const log = db.getLogBacaanHarianByTanggal(konteks.jid, tanggalISO);
+  if (!log) {
+    return {
+      sukses: true,
+      ada_data: false,
+      tanggal: tanggalISO,
+      pesan: 'Tidak ada catatan bacaan di tanggal itu (kemungkinan user tidak tilawah hari itu).',
+    };
+  }
+  return {
+    sukses: true,
+    ada_data: true,
+    tanggal: tanggalISO,
+    surat_ayat_terakhir: log.surat_ayat_akhir,
+    jumlah_kartu: log.jumlah_kartu,
+  };
+}
+
 async function eksekusiBroadcastKeGrupSosial({ isi_pesan }, konteks) {
   const user = db.getUser(konteks.jid);
   if (!user.group_sosial_jid) {
@@ -290,7 +350,7 @@ const EKSEKUTOR_PERSONAL = {
   update_preferensi_user: eksekusiUpdatePreferensiUser,
   set_posisi_bacaan: eksekusiSetPosisiBacaan,
   broadcast_ke_grup_sosial: eksekusiBroadcastKeGrupSosial,
-  set_grup_sosial_ini: eksekusiSetGrupSosialIni,
+  tanya_bacaan_hari_lain: eksekusiTanyaBacaanHariLain,
 };
 
 // ========== EKSEKUTOR — GRUP ==========
@@ -379,11 +439,38 @@ async function eksekusiSetGrupSosialIni(_, konteks) {
   return { sukses: true, catatan_untuk_ai: 'Grup ini berhasil dijadikan grup sosial user. Beri tahu singkat bahwa mulai sekarang progressnya akan di-report ke sini.' };
 }
 
+// Klaim card lelang Isya -- cari apakah ada tawaran aktif untuk nama_target di grup ini,
+// kalau ada, kirim card LANJUTAN milik nama_target secara PERSONAL ke yang klaim (senderJid),
+// bukan ke grup. Grup cuma dapat teks konfirmasi.
+async function eksekusiKlaimCardKawan({ nama_target }, konteks) {
+  const tawaran = konteks.ambilTawaranLelangAktif(konteks.groupJid, nama_target);
+  if (!tawaran) {
+    return {
+      sukses: false,
+      pesan: `Tidak ada tawaran lelang aktif untuk "${nama_target}" di grup ini saat ini (mungkin sudah diklaim orang lain, atau belum pernah ditawarkan hari ini).`,
+    };
+  }
+
+  const hasilKirim = await konteks.kirimCardLelangPersonal(konteks.senderJid, tawaran.jid);
+  if (!hasilKirim.sukses) {
+    return { sukses: false, pesan: hasilKirim.pesan || 'Gagal mengirim card.' };
+  }
+
+  konteks.tandaiTawaranSudahDiklaim(konteks.groupJid, tawaran.jid);
+
+  return {
+    sukses: true,
+    nama_pemilik_card: tawaran.nama,
+    catatan_untuk_ai: `Card lanjutan milik ${tawaran.nama} berhasil dikirim PERSONAL ke chat pribadi yang klaim. Beri tahu singkat di grup bahwa card sudah dikirim ke chat pribadinya, tanpa perlu detail isi bacaannya.`,
+  };
+}
+
 const EKSEKUTOR_GRUP = {
   get_rekap_progress_grup: eksekusiGetRekapProgressGrup,
   minta_rekap_harian: eksekusiMintaRekapHarian,
   tag_anggota_grup: eksekusiTagAnggotaGrup,
   set_grup_sosial_ini: eksekusiSetGrupSosialIni,
+  klaim_card_kawan: eksekusiKlaimCardKawan,
 };
 
 module.exports = {
