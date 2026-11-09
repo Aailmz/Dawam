@@ -58,6 +58,15 @@ const {
   setGroupSosialJikaBelumAda,
   hitungSisaProgressUser,
   cariGroupUntukUserDariRoster,
+  // log bacaan harian + lelang + rekap mingguan
+  catatLogBacaanHarian,
+  getLogBacaanHarianRange,
+  getAnggotaDiBawahPaceHariIni,
+  // Jumat Al-Kahfi
+  getBacaanAlkahfiById,
+  updateLastSentAlkahfiId,
+  setTanggalTerakhirAlkahfi,
+  OPSI_TARGET_VALID,
 } = require('./db');
 const groqAI = require('./groq');
 const {
@@ -74,8 +83,10 @@ const { buatPromptPersonal, buatPromptGrup } = require('./prompts');
 const JEDA_TAWARAN_MS = 10 * 60 * 1000; // 1 menit (prototype)
 const AMBANG_SILENT_JAM = 6; // silent user dianggap no-response setelah 6 jam (§7.3)
 const INTERVAL_CRON_SILENT = '0 */3 * * *'; // tiap 3 jam
-const INTERVAL_CRON_MOTIVASI_GROUP = '0 16 * * 5'; // tiap Jumat jam 16:00, ajakan ngobrol ke grup aktif
+const INTERVAL_CRON_MOTIVASI_GROUP = '0 16 * * 5'; // tiap Jumat jam 16:00, rekap MINGGUAN ke grup aktif (bukan ajakan kosong lagi)
 const INTERVAL_CRON_REKAP_HARIAN = '0 20 * * *'; // tiap hari jam 20:00, rekap progress ke grup aktif
+const INTERVAL_CRON_LELANG_ISYA = '0 19 * * *'; // tiap hari jam 19:00 (bareng jadwal Isya), tawaran lelang card ke grup
+const INTERVAL_CRON_ALKAHFI_JUMAT = '0 5 * * 5'; // tiap Jumat jam 5 pagi, tawaran mulai cicilan Al-Kahfi
 
 const JADWAL_SHOLAT = {
   subuh: { jam: 4, menit: 5 },
@@ -87,6 +98,36 @@ const JADWAL_SHOLAT = {
 
 let BOT_PN_NORMALIZED = null;  // nomor HP bot (format lama, @s.whatsapp.net)
 let BOT_LID_NORMALIZED = null; // LID bot (format baru, @lid) -- dipakai di mentionedJid grup
+
+
+// Tawaran lelang card yang lagi aktif per grup, direset tiap hari.
+// Struktur: { [groupJid]: { [userJid]: { nama, jid, diklaimOleh: null|jid } } }
+// In-memory saja (prototype) -- kalau bot restart, tawaran hari itu hilang, gak masalah
+// karena besok di-generate ulang dari getAnggotaDiBawahPaceHariIni.
+const tawaranLelangAktif = {};
+
+function setTawaranLelangGrup(groupJid, daftarDiBawahPace) {
+  tawaranLelangAktif[groupJid] = {};
+  for (const d of daftarDiBawahPace) {
+    tawaranLelangAktif[groupJid][d.jid] = { nama: d.nama, jid: d.jid, diklaimOleh: null };
+  }
+}
+
+function ambilTawaranLelangAktif(groupJid, namaTarget) {
+  const tawaranGrup = tawaranLelangAktif[groupJid];
+  if (!tawaranGrup) return null;
+  const namaLower = namaTarget.trim().toLowerCase();
+  const match = Object.values(tawaranGrup).find(
+    (t) => t.diklaimOleh === null && t.nama.toLowerCase().includes(namaLower)
+  );
+  return match || null;
+}
+
+function tandaiTawaranSudahDiklaim(groupJid, userJid) {
+  if (tawaranLelangAktif[groupJid]?.[userJid]) {
+    tawaranLelangAktif[groupJid][userJid].diklaimOleh = true;
+  }
+}
 
 function getRegisteredTargets() {
   return getAllUsers()
@@ -195,6 +236,9 @@ async function startBot() {
       setupSilentUserChecker();
       setupGroupMotivasiScheduler();
       setupRekapHarianScheduler();
+      setupLelangIsyaScheduler();
+      setupAlkahfiJumatScheduler();
+      setupReminderJumatLakiScheduler();
       printHelp();
     }
   });
@@ -380,9 +424,19 @@ async function handleIncomingMessage(jid, textAsli, textLower) {
     }
   }
 
-  // ONBOARDING tetap state machine terpisah, tidak lewat agent.
+    // ONBOARDING tetap state machine terpisah, tidak lewat agent.
   if (state === 'ONBOARDING') {
     await handleOnboardingTurn(jid, textAsli);
+    return;
+  }
+
+  // Jumat Al-Kahfi: state machine sederhana terpisah dari agent, mirip ONBOARDING.
+  if (state === 'WAITING_KONFIRMASI_ALKAHFI') {
+    const intent = await groqAI.parseIntentJawaban(textAsli);
+    if (intent === 'YA') {
+      await kirimCardAlkahfiLanjutan(jid);
+    }
+    setUserState(jid, 'IDLE');
     return;
   }
 
@@ -743,6 +797,7 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
   resetNoResponse(jid);
 
   const { status: statusPace, selisihTampilan } = hitungStatusPaceUntukAgent(jid);
+  catatLogBacaanHarian(jid, hariIniISO, nextId, bacaan.surat_ayat, statusPace);
   console.log(`✅ [Agent] Bacaan ${jenisDikirim} terkirim ke ${jid}: ${bacaan.surat_ayat} (id=${nextId})`);
 
   if (user.group_sosial_jid && user.sudah_lapor_sesi_ini === 0) {
@@ -791,6 +846,53 @@ async function kirimTerjemahBacaanUntukAgent(jid) {
 
   console.log(`✅ [Agent] Terjemah terkirim ke ${jid}: ${bacaan.surat_ayat}`);
   return { sukses: true, surat_ayat: bacaan.surat_ayat, catatan_untuk_ai: catatan };
+}
+
+// ---- Lelang Isya (poin 1): kirim card LANJUTAN milik pemilikJid, tapi PERSONAL ke penerimaJid ----
+async function kirimCardLelangPersonal(penerimaJid, pemilikJid) {
+  const pemilik = getUser(pemilikJid);
+  const idSebelumWrap = pemilik.last_sent_bacaan_id + 1;
+  let nextId = idSebelumWrap;
+  if (nextId > 900) nextId = 1;
+
+  const bacaan = getBacaanById(nextId);
+  if (!bacaan) {
+    return { sukses: false, pesan: 'Data bacaan pemilik card tidak ditemukan.' };
+  }
+
+  const jenisDikirim = pemilik.mode_baca_arab_saja === 1 ? 'arab' : 'indo';
+  const terkirim = await kirimGambarBacaanMentah(penerimaJid, bacaan, jenisDikirim);
+  if (!terkirim) {
+    return { sukses: false, pesan: 'Gagal mengirim gambar card lelang.' };
+  }
+
+  console.log(`✅ [Lelang] Card ${pemilik.name || pemilikJid} (${bacaan.surat_ayat}) dikirim personal ke ${penerimaJid}`);
+  // Sengaja TIDAK update last_sent_bacaan_id milik pemilik atau penerima -- ini cuma
+  // "titip baca" sosial, bukan progress resmi siapa-siapa. Kalau ke depan mau dihitung
+  // sebagai progress salah satu pihak, perlu keputusan eksplisit lagi (punya siapa yang nambah).
+  return { sukses: true, surat_ayat: bacaan.surat_ayat };
+}
+
+// ---- Broadcast tawaran lelang ke grup, dipanggil cron jam 19:00 SEBELUM rekap harian ----
+async function kirimTawaranLelangKeGrup(groupJid) {
+  const diBawahPace = getAnggotaDiBawahPaceHariIni(groupJid);
+
+  if (diBawahPace.length === 0) {
+    console.log(`(Grup ${groupJid}: tidak ada yang di bawah pace, lelang dilewati.)`);
+    return;
+  }
+
+  setTawaranLelangGrup(groupJid, diBawahPace);
+
+  const daftarNama = diBawahPace.map((d) => `• ${d.nama} (${d.selisih_tampilan} dari target)`).join('\n');
+  const teks = `🤍 Jelang Isya, ada beberapa sahabat yang masih kurang dari target hari ini:\n\n${daftarNama}\n\nYuk siapa yang mau bantu temenin baca, tinggal bilang "aku baca punya [nama] ya" di sini. Card lanjutannya nanti Dawam kirim ke chat pribadimu 📖`;
+
+  try {
+    await sock.sendMessage(groupJid, { text: teks });
+    console.log(`✅ Tawaran lelang terkirim ke grup ${groupJid} (${diBawahPace.length} orang di bawah pace).`);
+  } catch (err) {
+    console.error('❌ Gagal kirim tawaran lelang:', err.message);
+  }
 }
 
 // ---- §4.3: Deteksi kecepatan & tawaran lanjut ----
@@ -960,6 +1062,49 @@ async function kirimTawaranNgaji(jid) {
   console.log(`✅ Tawaran ngaji terkirim ke ${jid}, menunggu balasan...`);
 }
 
+// ========== REMINDER JUMAT KHUSUS LAKI-LAKI (poin 5) ==========
+// 15 menit sebelum waktu Dzuhur Jumat, HANYA untuk gender L, pesan khusus sholat Jumat
+// (bukan reminder Dzuhur biasa yang generik).
+
+async function kirimReminderJumatLaki(jid) {
+  const nama = getUserName(jid) || 'Sahabat Dawam';
+  const teks = `Assalamu'alaikum, ${nama} 🕌\n\n15 menit lagi menuju waktu sholat Jumat. Yuk bersiap, segerakan ke masjid ya, Akhi.\n\n"Hai orang-orang beriman, apabila diseru untuk menunaikan shalat Jum'at, maka bersegeralah kamu kepada mengingat Allah." (QS. Al-Jumu'ah: 9)`;
+  await sock.sendMessage(jid, { text: teks });
+  simpanChatHistory(jid, 'assistant', teks);
+  console.log(`✅ Reminder Jumat (laki-laki) terkirim ke ${jid}`);
+}
+
+let reminderJumatLakiSchedulerSudahDiset = false;
+
+function setupReminderJumatLakiScheduler() {
+  if (reminderJumatLakiSchedulerSudahDiset) return;
+  reminderJumatLakiSchedulerSudahDiset = true;
+
+  let menitDzuhur = JADWAL_SHOLAT.dzuhur.menit - 15;
+  let jamDzuhur = JADWAL_SHOLAT.dzuhur.jam;
+  if (menitDzuhur < 0) {
+    menitDzuhur += 60;
+    jamDzuhur -= 1;
+  }
+
+  // "* * 5" -- hari Jumat saja (0=Minggu ... 5=Jumat di node-cron)
+  const cronExpr = `${menitDzuhur} ${jamDzuhur} * * 5`;
+
+  cron.schedule(cronExpr, async () => {
+    console.log('\n🕌 Mengirim reminder Jumat (laki-laki)...');
+    const targets = getAllUsers().filter((u) => u.is_registered === 1 && u.gender === 'L');
+    if (targets.length === 0) {
+      console.log('⚠️  Tidak ada user laki-laki teraktivasi, reminder Jumat dilewati.');
+      return;
+    }
+    for (const u of targets) {
+      await kirimReminderJumatLaki(u.jid);
+    }
+  });
+
+  console.log(`🕒 Reminder Jumat (laki-laki) diset jam ${jamDzuhur}:${String(menitDzuhur).padStart(2, '0')} tiap Jumat (15 menit sebelum Dzuhur).`);
+}
+
 // ========== GRUP: MURNI RUANG SOSIAL (phase 3) ==========
 // Bacaan TIDAK PERNAH dikirim ke grup. Grup cuma tempat lapor progress,
 // saling menyemangati, dan ngobrol soal tilawah. Bot silent di grup kecuali
@@ -1057,6 +1202,9 @@ async function routeGroupMessage(groupJid, senderJid, text) {
     },
     kirimRekapHarian: async (targetGroupJid) => kirimRekapHarianKeGrup(targetGroupJid, true, true),
     kirimTagKeGrup: (targetGroupJid, pesan, jidList) => kirimTagKeGrup(targetGroupJid, pesan, jidList),
+    ambilTawaranLelangAktif: (targetGroupJid, namaTarget) => ambilTawaranLelangAktif(targetGroupJid, namaTarget),
+    kirimCardLelangPersonal: (penerimaJid, pemilikJid) => kirimCardLelangPersonal(penerimaJid, pemilikJid),
+    tandaiTawaranSudahDiklaim: (targetGroupJid, userJid) => tandaiTawaranSudahDiklaim(targetGroupJid, userJid),
   };
 
   const hasil = await jalankanAgentDawam({
@@ -1079,15 +1227,66 @@ async function routeGroupMessage(groupJid, senderJid, text) {
   catatAktivitasGroup(groupJid, senderJid, 'LAPOR_PROGRESS', text.slice(0, 200));
 }
 
-// ---- Broadcast ajakan ngobrol ringan ke grup aktif, berkala (BUKAN kirim bacaan) ----
+// ---- Rekap MINGGUAN asli ke grup aktif, tiap Jumat (poin 2) ----
+// Beda dari rekap harian: agregat 7 hari terakhir per anggota, lebih deskriptif.
 let groupMotivasiSchedulerSudahDiset = false;
+
+function formatRekapMingguanTerstruktur(groupJid) {
+  const anggotaJids = getAnggotaGroup(groupJid);
+  const hariIni = new Date();
+  const tanggalSelesai = hariIni.toISOString().slice(0, 10);
+  const tanggalMulai = new Date(hariIni);
+  tanggalMulai.setDate(tanggalMulai.getDate() - 6);
+  const tanggalMulaiISO = tanggalMulai.toISOString().slice(0, 10);
+
+  const baris = [];
+  let adaDataSamaSekali = false;
+
+  for (const jid of anggotaJids) {
+    const user = getUser(jid);
+    if (user.is_registered !== 1) continue;
+
+    const logMingguIni = getLogBacaanHarianRange(jid, tanggalMulaiISO, tanggalSelesai);
+    const totalKartu = logMingguIni.reduce((acc, l) => acc + l.jumlah_kartu, 0);
+    const hariAktif = logMingguIni.length;
+
+    if (totalKartu > 0) adaDataSamaSekali = true;
+
+    const sisa = hitungSisaProgressUser(jid);
+    const posisiAkhir = logMingguIni.length > 0
+      ? logMingguIni[logMingguIni.length - 1].surat_ayat_akhir
+      : 'belum ada bacaan minggu ini';
+
+    baris.push({
+      nama: user.name || 'Sahabat',
+      hari_aktif: hariAktif,
+      total_kartu: totalKartu,
+      posisi_akhir_minggu: posisiAkhir,
+      persen_pace: sisa.persen_pace ?? null,
+      status_pace: sisa.status || null,
+    });
+  }
+
+  if (!adaDataSamaSekali && baris.length === 0) return null;
+
+  let teks = `📅 *Rekap Tilawah Minggu Ini* (${tanggalMulaiISO} s/d ${tanggalSelesai})\n\n`;
+  for (const b of baris) {
+    const emoji = b.hari_aktif >= 6 ? '🔥' : b.hari_aktif >= 3 ? '📖' : b.hari_aktif > 0 ? '🌱' : '💤';
+    teks += `${emoji} *${b.nama}* — aktif ${b.hari_aktif}/7 hari, ${b.total_kartu} kartu dibaca\n`;
+    teks += `   posisi akhir minggu: ${b.posisi_akhir_minggu}`;
+    if (b.persen_pace !== null) teks += ` (${b.persen_pace}% dari target harian ini)`;
+    teks += '\n\n';
+  }
+
+  return teks.trim();
+}
 
 function setupGroupMotivasiScheduler() {
   if (groupMotivasiSchedulerSudahDiset) return;
   groupMotivasiSchedulerSudahDiset = true;
 
   cron.schedule(INTERVAL_CRON_MOTIVASI_GROUP, async () => {
-    console.log('\n💬 Mengirim ajakan ngobrol mingguan ke grup aktif...');
+    console.log('\n📅 Mengirim rekap mingguan ke grup aktif...');
     const grupAktif = getAllGroupsAktif();
 
     if (grupAktif.length === 0) {
@@ -1096,17 +1295,22 @@ function setupGroupMotivasiScheduler() {
     }
 
     for (const g of grupAktif) {
-      let pesan = await groqAI.generateAjakanObrolGroup();
-      if (!pesan) {
-        pesan = 'Assalamu\'alaikum, Sahabat sekalian 🌙 Gimana progress tilawah minggu ini? Yuk cerita-cerita di sini, saling menyemangati 😊';
+      const teksRekap = formatRekapMingguanTerstruktur(g.jid);
+      if (!teksRekap) {
+        console.log(`(Grup ${g.jid}: belum ada anggota aktivasi, rekap mingguan dilewati.)`);
+        continue;
       }
-      await sock.sendMessage(g.jid, { text: pesan });
+
+      let kalimatPenutup = await groqAI.generateKalimatMotivasiRekapHarian(false);
+      const pesanFinal = kalimatPenutup ? `${teksRekap}\n\n${kalimatPenutup}` : teksRekap;
+
+      await sock.sendMessage(g.jid, { text: pesanFinal });
       setGroupWaktuMotivasiTerakhir(g.jid, new Date().toISOString());
-      console.log(`✅ Ajakan ngobrol terkirim ke grup ${g.jid}`);
+      console.log(`✅ Rekap mingguan terkirim ke grup ${g.jid}`);
     }
   });
 
-  console.log(`🕒 Group motivasi scheduler diset (${INTERVAL_CRON_MOTIVASI_GROUP}).`);
+  console.log(`🕒 Group rekap mingguan scheduler diset (${INTERVAL_CRON_MOTIVASI_GROUP}).`);
 }
 
 // ---- Rekap harian progress ke grup aktif, jam 20:00 (poin 1) ----
@@ -1155,6 +1359,29 @@ function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
   }
 
   return { teks: teks.trim(), jidUntukMention };
+}
+
+let lelangIsyaSchedulerSudahDiset = false;
+
+function setupLelangIsyaScheduler() {
+  if (lelangIsyaSchedulerSudahDiset) return;
+  lelangIsyaSchedulerSudahDiset = true;
+
+  cron.schedule(INTERVAL_CRON_LELANG_ISYA, async () => {
+    console.log('\n🔔 Mengirim tawaran lelang Isya ke grup aktif...');
+    const grupAktif = getAllGroupsAktif();
+
+    if (grupAktif.length === 0) {
+      console.log('(Tidak ada grup aktif saat ini)');
+      return;
+    }
+
+    for (const g of grupAktif) {
+      await kirimTawaranLelangKeGrup(g.jid);
+    }
+  });
+
+  console.log(`🕒 Lelang Isya scheduler diset (${INTERVAL_CRON_LELANG_ISYA}).`);
 }
 
 function setupRekapHarianScheduler() {
@@ -1217,6 +1444,72 @@ async function kirimTagKeGrup(groupJid, pesanPembuka, jidList) {
     console.error('❌ Gagal kirim tag ke grup:', err.message);
     return false;
   }
+}
+
+// ========== JUMAT AL-KAHFI (poin 3) ==========
+// Tiap Jumat pagi, tawarkan mulai/lanjut cicilan Al-Kahfi -- terpisah dari progress
+// khataman utama. Posisi disimpan di last_sent_alkahfi_id (bukan last_sent_bacaan_id).
+
+async function kirimTawaranAlkahfi(jid) {
+  const user = getUser(jid);
+  const nama = getUserName(jid) || 'Sahabat Dawam';
+  const teks = `Selamat hari Jumat, ${nama} 🤍 Yuk sisihkan waktu buat baca Surat Al-Kahfi hari ini, dicicil pelan-pelan juga gapapa. Balas *"ya"* kalau mau dikirimkan lanjutannya sekarang.`;
+  await sock.sendMessage(jid, { text: teks });
+  simpanChatHistory(jid, 'assistant', teks);
+  setUserState(jid, 'WAITING_KONFIRMASI_ALKAHFI');
+  console.log(`✅ Tawaran Al-Kahfi terkirim ke ${jid}`);
+}
+
+async function kirimCardAlkahfiLanjutan(jid) {
+  const user = getUser(jid);
+  let nextId = (user.last_sent_alkahfi_id || 0) + 1;
+
+  let bacaan = getBacaanAlkahfiById(nextId);
+  if (!bacaan) {
+    // Habis/belum ada data id berikutnya dalam rentang Al-Kahfi -- coba cari ulang
+    // dari surat_ayat LIKE supaya dapat id AWAL Al-Kahfi (mulai dari awal lagi, anggap khatam cicilan).
+    bacaan = cariBacaanBySuratLike('Al-Kahfi');
+    if (!bacaan) {
+      return { sukses: false, pesan: 'Data bacaan Al-Kahfi tidak ditemukan di database.' };
+    }
+    nextId = bacaan.id;
+  }
+
+  try {
+    await sock.sendMessage(jid, {
+      image: { url: path.join(__dirname, bacaan.path_arab) },
+      caption: `Lanjutan Al-Kahfi untukmu (${bacaan.surat_ayat}) 🤍`,
+    });
+  } catch (err) {
+    console.error('❌ Gagal kirim card Al-Kahfi:', err.message);
+    return { sukses: false, pesan: 'Gagal mengirim gambar.' };
+  }
+
+  updateLastSentAlkahfiId(jid, nextId);
+  setTanggalTerakhirAlkahfi(jid, new Date().toISOString().slice(0, 10));
+  console.log(`✅ Card Al-Kahfi terkirim ke ${jid}: ${bacaan.surat_ayat} (id=${nextId})`);
+  return { sukses: true, surat_ayat: bacaan.surat_ayat };
+}
+
+let alkahfiJumatSchedulerSudahDiset = false;
+
+function setupAlkahfiJumatScheduler() {
+  if (alkahfiJumatSchedulerSudahDiset) return;
+  alkahfiJumatSchedulerSudahDiset = true;
+
+  cron.schedule(INTERVAL_CRON_ALKAHFI_JUMAT, async () => {
+    console.log('\n📖 Mengirim tawaran Al-Kahfi Jumat...');
+    const targets = getRegisteredTargets();
+    if (targets.length === 0) {
+      console.log('⚠️  Belum ada user teraktivasi, tawaran Al-Kahfi dilewati.');
+      return;
+    }
+    for (const jid of targets) {
+      await kirimTawaranAlkahfi(jid);
+    }
+  });
+
+  console.log(`🕒 Scheduler Al-Kahfi Jumat diset (${INTERVAL_CRON_ALKAHFI_JUMAT}).`);
 }
 
 // ========== SCHEDULER OTOMATIS PERSONAL (existing, tidak berubah) ==========
