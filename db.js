@@ -331,9 +331,16 @@ function isOnboardingLengkap(jid) {
 function updateUserFields(jid, data) {
   getOrCreateUser(jid);
   const kolomValid = ['name', 'location', 'gender', 'target_juz_per_hari', 'motivasi_personal', 'mulai_surat'];
-  const entries = Object.entries(data || {}).filter(
-    ([k, v]) => kolomValid.includes(k) && v !== null && v !== undefined && v !== ''
-  );
+  const entries = Object.entries(data || {}).filter(([k, v]) => {
+    if (!kolomValid.includes(k) || v === null || v === undefined || v === '') return false;
+    // Guardrail keras: target_juz_per_hari HARUS salah satu dari OPSI_TARGET_VALID,
+    // kalau nyasar nilai lain (AI salah tangkep), DIBUANG di sini, bukan disimpan apa adanya.
+    if (k === 'target_juz_per_hari' && !isTargetValid(v)) {
+      console.log(`⚠️  target_juz_per_hari="${v}" tidak valid (bukan salah satu dari ${OPSI_TARGET_VALID.join('/')}), diabaikan.`);
+      return false;
+    }
+    return true;
+  });
   if (entries.length === 0) return;
 
   const setClause = entries.map(([k]) => `${k} = ?`).join(', ');
@@ -414,7 +421,8 @@ function hitungSisaProgressUser(jid) {
   const hariBerjalan = hitungHariBerjalanUser(jid);
 
   let halamanPerHari;
-  if (user.target_juz_per_hari === '3') halamanPerHari = HALAMAN_PER_JUZ / 3;
+  if (user.target_juz_per_hari === '12') halamanPerHari = HALAMAN_PER_JUZ / 12;
+  else if (user.target_juz_per_hari === '3') halamanPerHari = HALAMAN_PER_JUZ / 3;
   else if (user.target_juz_per_hari === '1') halamanPerHari = HALAMAN_PER_JUZ / 1;
   else {
     return {
@@ -455,6 +463,84 @@ function hitungSisaProgressUser(jid) {
     persen_pace: persenPace,
     sudah_baca_hari_ini: sudahBacaHariIni,
   };
+}
+
+// ========== LOG BACAAN HARIAN (lelang + rekap mingguan) ==========
+
+// Upsert: kalau user udah kirim log hari itu, update bacaan_id_akhir/jumlah_kartu-nya.
+// Dipanggil tiap kali kirimBacaanLanjutanUntukAgent sukses ngirim (index.js).
+function catatLogBacaanHarian(userJid, tanggalISO, bacaanId, suratAyat, statusPace) {
+  const existing = db
+    .prepare('SELECT * FROM log_bacaan_harian WHERE user_jid = ? AND tanggal = ?')
+    .get(userJid, tanggalISO);
+
+  if (!existing) {
+    db.prepare(`
+      INSERT INTO log_bacaan_harian
+        (user_jid, tanggal, bacaan_id_awal, bacaan_id_akhir, surat_ayat_akhir, jumlah_kartu, status_pace_akhir)
+      VALUES (?, ?, ?, ?, ?, 1, ?)
+    `).run(userJid, tanggalISO, bacaanId, bacaanId, suratAyat, statusPace || null);
+  } else {
+    db.prepare(`
+      UPDATE log_bacaan_harian
+      SET bacaan_id_akhir = ?, surat_ayat_akhir = ?, jumlah_kartu = jumlah_kartu + 1, status_pace_akhir = ?
+      WHERE user_jid = ? AND tanggal = ?
+    `).run(bacaanId, suratAyat, statusPace || null, userJid, tanggalISO);
+  }
+}
+
+// Dipakai buat jawab "kemarin baca apa" -- knowledge gak cuma hari ini.
+function getLogBacaanHarianByTanggal(userJid, tanggalISO) {
+  return db
+    .prepare('SELECT * FROM log_bacaan_harian WHERE user_jid = ? AND tanggal = ?')
+    .get(userJid, tanggalISO);
+}
+
+// Range tanggal (inklusif), dipakai buat rekap mingguan (poin 2).
+function getLogBacaanHarianRange(userJid, tanggalMulaiISO, tanggalSelesaiISO) {
+  return db
+    .prepare(`
+      SELECT * FROM log_bacaan_harian
+      WHERE user_jid = ? AND tanggal >= ? AND tanggal <= ?
+      ORDER BY tanggal ASC
+    `)
+    .all(userJid, tanggalMulaiISO, tanggalSelesaiISO);
+}
+
+// Anggota grup yang DI_BAWAH_PACE hari ini -- basis tawaran "lelang" pas Isya (poin 1).
+// Reuse hitungSisaProgressUser per anggota (sama kayak getRekapProgressGroup), tapi
+// difilter khusus status DI_BAWAH_PACE dan sudah_aktivasi_personal=true saja.
+function getAnggotaDiBawahPaceHariIni(groupJid) {
+  const anggotaJids = getAnggotaGroup(groupJid);
+  const hasil = [];
+  for (const jid of anggotaJids) {
+    const user = getUser(jid);
+    if (user.is_registered !== 1) continue;
+    const sisa = hitungSisaProgressUser(jid);
+    if (sisa.ada_target && sisa.status === 'DI_BAWAH_PACE') {
+      hasil.push({ jid, nama: user.name || 'Sahabat', selisih_tampilan: sisa.selisih_tampilan });
+    }
+  }
+  return hasil;
+}
+
+// ========== JUMAT AL-KAHFI (poin 3) ==========
+// Posisi terpisah dari progress khataman utama -- cuma dalam surat Al-Kahfi,
+// dicicil tiap Jumat. Dimulai dari bacaan_id manapun yang path-nya surat_ayat LIKE 'Al-Kahfi%'.
+
+function getBacaanAlkahfiById(id) {
+  const row = db.prepare('SELECT * FROM bacaan WHERE id = ? AND surat_ayat LIKE ?').get(id, 'Al-Kahfi%');
+  return row || null;
+}
+
+function updateLastSentAlkahfiId(jid, newId) {
+  getOrCreateUser(jid);
+  db.prepare('UPDATE users SET last_sent_alkahfi_id = ? WHERE jid = ?').run(newId, jid);
+}
+
+function setTanggalTerakhirAlkahfi(jid, tanggalISO) {
+  getOrCreateUser(jid);
+  db.prepare('UPDATE users SET tanggal_terakhir_alkahfi = ? WHERE jid = ?').run(tanggalISO, jid);
 }
 
 // ========== GROUPS (murni sosial, phase 3) ==========
