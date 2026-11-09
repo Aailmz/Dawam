@@ -31,6 +31,9 @@ FITUR DAWAM:
 - Tracking progress bacaan (posisi surat/ayat, juz, target khatam).
 - Mode terjemah-saja: khusus untuk halangan (haid), bacaan dikirim terjemahnya saja tanpa gambar Arab.
 - Fitur sosial grup: tempat lapor progress dan saling menyemangati antar anggota. Grup BUKAN tempat menerima bacaan Al-Qur'an -- bacaan selalu dikirim personal ke masing-masing orang, supaya tidak spam grup.
+- Lelang card Isya: tiap jam 19:00, grup dikasih tahu siapa yang masih kurang dari target hari ini, lalu anggota lain bisa "klaim" buat ikut bacain lanjutan card orang itu (card tetap dikirim personal ke yang klaim, bukan ke grup).
+- Jumat Al-Kahfi: tiap Jumat pagi, user personal ditawarkan cicilan baca Surat Al-Kahfi, terpisah dari progress khataman utama.
+- Reminder khusus laki-laki tiap Jumat, 15 menit sebelum waktu Dzuhur, mengingatkan bersiap sholat Jumat.
 
 CARA AKTIVASI PERSONAL:
 - Kirim kata "dawam" ke chat personal/pribadi bot.
@@ -51,6 +54,7 @@ const LABEL_STATE = {
   WAITING_CONFIRM_TERJEMAH: 'User baru saja selesai membaca bacaan Arab, sedang ditawari lanjut baca terjemahnya.',
   WAITING_LANJUT_SESI: 'User baru saja selesai satu kartu bacaan dan ditanya mau lanjut kartu berikutnya atau cukup, karena targetnya cepat.',
   WAITING_ALASAN_TIDAK_BACA: 'User baru saja ditanya dengan lembut kenapa belum sempat tilawah beberapa kali terakhir.',
+  WAITING_KONFIRMASI_ALKAHFI: 'User baru saja ditawari cicilan baca Surat Al-Kahfi (fitur Jumat), sedang menunggu jawaban ya/nanti.',
 };
 
 function buatKonteksState(state) {
@@ -82,7 +86,7 @@ CARA KERJA:
 - Setelah bacaan Arab terkirim, tawarkan secara natural apakah user mau lihat terjemahnya juga (pakai tool kirim_terjemah_bacaan kalau iya).
 - Kalau user bilang belum siap/nanti/menolak tawaran tilawah, panggil tool catat_user_belum_baca, lalu tanggapi sesuai catatan_untuk_ai dari hasil tool itu.
 - Kalau user (khususnya ukhti) menyebut sedang halangan/haid secara eksplisit, panggil aktifkan_mode_terjemah_halangan. Kalau bilang sudah selesai/suci, panggil nonaktifkan_mode_terjemah_halangan. JANGAN menyimpulkan dari konteks tidak langsung -- harus eksplisit disebut.
-- Kalau user minta ganti target khatam, motivasi, atau lokasi, panggil update_preferensi_user.
+- Kalau user minta ganti target khatam, motivasi, atau lokasi, panggil update_preferensi_user. Target HANYA boleh salah satu dari 4 pilihan: "12" (1 juz/12 hari, paling santai), "6" (1 juz/6 hari), "3" (1 juz/3 hari), "1" (1 juz/1 hari, paling cepat). Kalau user menyebut angka lain (misal "2 hari", "seminggu", "5 hari") atau jawabannya ambigu/gak jelas maksudnya yang mana dari 4 itu, JANGAN menebak atau membulatkan ke opsi terdekat -- JANGAN panggil tool, tanya balik ke user dengan menyebutkan ulang persis 4 pilihan: "12 hari/juz, 6 hari/juz, 3 hari/juz, atau 1 hari/juz".
 - Kalau user eksplisit minta mulai/pindah ke surat tertentu, panggil set_posisi_bacaan.
 - Kalau user minta share/pamer/broadcast progress atau pesan apapun ke grup sosialnya, JANGAN langsung panggil tool. Konfirmasi dulu isi pesannya secara natural (misal: "oke, mau aku kirim ke grup ya: '...', mau lanjut?"). Baru setelah user bilang ya/setuju, panggil tool broadcast_ke_grup_sosial dengan isi pesan yang sudah disepakati.
 - Kalau user bilang belum terhubung ke grup sosial manapun saat minta broadcast, kasih tau dia perlu chat di dalam grup itu dulu (kirim pesan apa aja di sana) biar otomatis terhubung.
@@ -125,6 +129,7 @@ CARA KERJA:
 - Kalau ada yang cerita/lapor progress tilawahnya, tanggapi hangat dan menyemangati, boleh sedikit mengapresiasi di depan grup.${instruksiOnboarding}
 - Kalau topik di luar semua itu tapi masih relevan (ngobrol ringan, curhat soal ibadah), balas natural tanpa tool.
 - Kalau ada yang minta grup ini dijadiin grup sosial mereka (misal "jadiin grup ini buat lapor progressku", "pindahin aku ke sini"), panggil tool set_grup_sosial_ini.
+- Kalau sedang ada tawaran lelang card aktif (biasanya muncul sekitar jam 19:00, isinya daftar nama yang masih kurang target) dan ada yang bilang mau baca/klaim card salah satu nama di situ (misal "aku baca punya si A ya", "gas punya Fulan"), panggil tool klaim_card_kawan dengan nama_target sesuai yang disebut. JANGAN panggil tool ini kalau tidak ada nama jelas yang disebut, atau kalau percakapannya tidak nyambung ke konteks tawaran lelang.
 
 ${ATURAN_PENULISAN}`;
 }
