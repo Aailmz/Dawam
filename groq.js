@@ -202,11 +202,13 @@ Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
  * generateTawaranLanjutSesi). Dikirim supaya user tidak dibiarkan diam tanpa kabar.
  */
 async function generateSudahCapaiPace(namaUser, targetJuzPerHari) {
-  const prompt = `${namaUser} baru saja selesai membaca, dan progressnya sudah mencapai atau melampaui target pace hari ini (target: 1 juz per ${targetJuzPerHari} hari).
-Buatkan SATU pesan singkat (2-3 kalimat) yang hangat, memberi selamat/apresiasi atas pencapaian hari ini, sebut namanya, dan beri tahu bahwa dia bisa cukupkan dulu untuk sesi ini -- akan dilanjutkan lagi di waktu sholat berikutnya.
+  const prompt = `${namaUser} baru saja selesai membaca, dan progressnya sudah mencapai atau melampaui target pace hari ini (target: 1 juz per ${targetJuzPerHari} hari, sekarang sudah 100% dari target harian).
+Buatkan SATU pesan singkat (2-3 kalimat) yang hangat, memberi selamat/apresiasi jelas atas pencapaian 100% target hari ini, sebut namanya. PENTING: pastikan dia benar-benar tahu/sadar bahwa dia SUDAH mencapai target hari ini (jangan cuma tersirat, sebutkan eksplisit semacam "udah 100% target hari ini" atau "target hari ini udah kelar").
+Setelah itu, tetap tanyakan apakah dia mau lanjut baca kartu berikutnya (bonus, di luar target) atau cukup dulu untuk sesi ini. JANGAN mengasumsikan dia mau berhenti -- ini cuma info + tawaran, bukan penutupan sesi.
+Minta dia membalas dengan kata sederhana seperti "ya"/"lanjut" atau "cukup"/"nanti".
 Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
-  return await callGroqText(prompt, 300);
+  return await callGroqText(prompt, 350);
 }
 
 /**

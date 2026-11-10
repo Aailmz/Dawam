@@ -628,8 +628,18 @@ async function handleJawabanLanjutSesi(jid, text) {
     await kirimBacaanArab(jid);
   } else if (intent === 'TIDAK') {
     const user = getUser(jid);
-    let pesan = await groqAI.generateIngatkanTargetAsli(nama, user.target_juz_per_hari);
-    if (pesan) await sock.sendMessage(jid, { text: pesan });
+    const sisa = hitungSisaProgressUser(jid);
+
+    if (sisa.ada_target && (sisa.status === 'SUDAH_CAPAI_PACE' || sisa.status === 'PAS_PACE')) {
+      // Sudah capai target, user milih cukup -- ini capaian, bukan kurang, jadi JANGAN
+      // pakai generateIngatkanTargetAsli (itu buat yang masih kurang dari target).
+      let pesan = await groqAI.generatePenutupSesiBiasa(nama);
+      if (!pesan) pesan = `Mantap, ${nama}! Udah 100% target hari ini, istirahat dulu gapapa 🤍 Sampai jumpa di waktu sholat berikutnya.`;
+      await sock.sendMessage(jid, { text: pesan });
+    } else {
+      let pesan = await groqAI.generateIngatkanTargetAsli(nama, user.target_juz_per_hari);
+      if (pesan) await sock.sendMessage(jid, { text: pesan });
+    }
     setUserState(jid, 'IDLE');
   } else {
     let pesan = await groqAI.generateFallbackChat(nama, text);
@@ -755,7 +765,8 @@ function buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, target, selisih
   if (statusPace === 'DI_BAWAH_PACE') {
     bagianPace = ` User punya target cepat (1 juz per ${target} hari) dan masih ${selisihTampilan} dari target hari ini. Sebutkan angka ini APA ADANYA (jangan dikonversi ulang), semangati, dan tawarkan apakah mau lanjut baca kartu berikutnya sekarang juga.`;
   } else if (statusPace === 'SUDAH_CAPAI_PACE') {
-    bagianPace = ` User sudah mencapai/melampaui target pace hari ini (1 juz per ${target} hari), malah ${selisihTampilan} dari target. Beri apresiasi, sebutkan angka ini APA ADANYA, dan beri tahu cukup untuk sesi ini, akan dilanjutkan di waktu sholat berikutnya.`;
+    // Tetap apresiasi jelas (poin 1), TAPI tetap tawarkan lanjut, bukan ditutup.
+    bagianPace = ` User SUDAH mencapai 100% target pace hari ini (1 juz per ${target} hari), malah ${selisihTampilan} dari target. WAJIB sebutkan eksplisit bahwa target hari ini sudah tercapai/100% (jangan cuma tersirat) dan beri apresiasi hangat. Setelah itu tetap tanyakan apakah user mau lanjut baca kartu berikutnya (sebagai bonus, bukan kewajiban) atau cukup dulu -- JANGAN langsung menyimpulkan sesi selesai.`;
   }
 
   return bagianMode + bagianPace;
@@ -915,12 +926,14 @@ async function cekKecepatanDanTawarkanLanjut(jid) {
     await sock.sendMessage(jid, { text: pesan });
     setUserState(jid, 'WAITING_LANJUT_SESI');
   } else {
+    // SUDAH_CAPAI_PACE / PAS_PACE (100% target hari ini): tetap kasih tau + apresiasi,
+    // TAPI tetap tawarkan lanjut (bukan ditutup otomatis) -- poin 1 note terbaru.
     let pesan = await groqAI.generateSudahCapaiPace(nama, user.target_juz_per_hari);
     if (!pesan) {
-      pesan = `Alhamdulillah, ${nama} sudah mencapai target hari ini (1 juz per ${user.target_juz_per_hari} hari) 🤍 Sampai jumpa di waktu sholat berikutnya ya!`;
+      pesan = `Alhamdulillah, ${nama} udah 100% target hari ini (1 juz per ${user.target_juz_per_hari} hari) 🎉 Mau lanjut baca kartu berikutnya (bonus), atau cukup dulu untuk sesi ini?`;
     }
     await sock.sendMessage(jid, { text: pesan });
-    setUserState(jid, 'IDLE');
+    setUserState(jid, 'WAITING_LANJUT_SESI');
   }
 }
 
