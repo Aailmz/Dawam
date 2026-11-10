@@ -415,6 +415,9 @@ function hitungSisaProgressUser(jid) {
       halaman_ditempuh: halamanDitempuh,
       total_halaman_keseluruhan: TOTAL_HALAMAN_KESELURUHAN,
       sudah_baca_hari_ini: user.tanggal_terakhir_baca === hariIniISOAwal,
+      // null = memang tidak relevan dihitung (target santai/belum mulai), BUKAN 0%.
+      // Konsumen (rekap) WAJIB tampilkan field ini -- null ditampilkan sebagai "-" bukan di-skip.
+      persen_pace: null,
     };
   }
 
@@ -444,7 +447,13 @@ function hitungSisaProgressUser(jid) {
   else status = 'PAS_PACE';
 
   const tampilan = formatSelisihUntukTampilan(Math.abs(selisihHalaman));
-  const persenPace = halamanTarget > 0 ? Math.round((halamanDitempuh / halamanTarget) * 100) : null;
+  // Cap ke 100% begitu capai/lewat target hari ini -- user yang jauh melampaui target
+  // (misal baca banyak sekaligus) tetap ditampilkan 100%, bukan 130%/200% dst, karena
+  // "progress hari ini" secara konsep selesai begitu nyampe 100%, sisanya kelebihan.
+  const persenPaceMentah = halamanTarget > 0 ? Math.round((halamanDitempuh / halamanTarget) * 100) : null;
+  const persenPace = persenPaceMentah !== null
+    ? (status === 'SUDAH_CAPAI_PACE' || status === 'PAS_PACE' ? 100 : persenPaceMentah)
+    : null;
   const hariIniISO = new Date().toISOString().slice(0, 10);
   const sudahBacaHariIni = user.tanggal_terakhir_baca === hariIniISO;
 
