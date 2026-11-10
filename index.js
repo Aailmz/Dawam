@@ -1270,13 +1270,30 @@ function formatRekapMingguanTerstruktur(groupJid) {
       ? logMingguIni[logMingguIni.length - 1].surat_ayat_akhir
       : 'belum ada bacaan minggu ini';
 
+    // Persen mingguan WAJIB (poin 2): rata-rata dari persen harian minggu ini (sisa capai
+    // target = 100%, lihat hitungSisaProgressUser). Kalau target user santai ('6'/belum ada),
+    // tidak ada angka harian yang relevan sama sekali -> null ("-"), BUKAN 0%.
+    let persenMingguan = null;
+    if (sisa.ada_target) {
+      // Reuse status_pace_akhir yang disimpan tiap hari di log_bacaan_harian sebagai proxy:
+      // SUDAH_CAPAI_PACE/PAS_PACE dihitung 100% hari itu, DI_BAWAH_PACE dihitung dari snapshot
+      // hari ini (sisa.persen_pace) sebagai representasi rata-rata kasar.
+      const hariCapaiTarget = logMingguIni.filter(
+        (l) => l.status_pace_akhir === 'SUDAH_CAPAI_PACE' || l.status_pace_akhir === 'PAS_PACE'
+      ).length;
+      const totalHariDenganData = logMingguIni.filter((l) => l.status_pace_akhir !== null).length;
+      persenMingguan = totalHariDenganData > 0
+        ? Math.round((hariCapaiTarget / totalHariDenganData) * 100)
+        : (sisa.persen_pace ?? 0);
+    }
+
     baris.push({
       nama: user.name || 'Sahabat',
       hari_aktif: hariAktif,
       total_kartu: totalKartu,
       posisi_akhir_minggu: posisiAkhir,
-      persen_pace: sisa.persen_pace ?? null,
-      status_pace: sisa.status || null,
+      persen_pace_mingguan: persenMingguan,
+      status_pace_sekarang: sisa.status || null,
     });
   }
 
@@ -1285,9 +1302,9 @@ function formatRekapMingguanTerstruktur(groupJid) {
   let teks = `📅 *Rekap Tilawah Minggu Ini* (${tanggalMulaiISO} s/d ${tanggalSelesai})\n\n`;
   for (const b of baris) {
     const emoji = b.hari_aktif >= 6 ? '🔥' : b.hari_aktif >= 3 ? '📖' : b.hari_aktif > 0 ? '🌱' : '💤';
+    const persenTampilan = b.persen_pace_mingguan !== null ? `${b.persen_pace_mingguan}%` : '-';
     teks += `${emoji} *${b.nama}* — aktif ${b.hari_aktif}/7 hari, ${b.total_kartu} kartu dibaca\n`;
-    teks += `   posisi akhir minggu: ${b.posisi_akhir_minggu}`;
-    if (b.persen_pace !== null) teks += ` (${b.persen_pace}% dari target harian ini)`;
+    teks += `   posisi akhir minggu: ${b.posisi_akhir_minggu} (rata-rata ${persenTampilan} capaian target harian minggu ini)`;
     teks += '\n\n';
   }
 
@@ -1352,7 +1369,10 @@ function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
     if (d.juz_sekarang) teks += ` (juz ${d.juz_sekarang})`;
     teks += `\n   sudah menempuh ${d.halaman_ditempuh} halaman`;
     if (d.selisih_dari_target) teks += `, ${d.selisih_dari_target} dari target`;
-    if (d.persen_pace !== null) teks += ` (${d.persen_pace}% dari target harian)`;
+    // Persentase WAJIB tampil tiap user -- null (target santai/pace normal, bukan berarti
+    // 0%) ditampilkan "-", bukan di-skip, bukan dipaksa jadi 0%.
+    const persenTampilan = d.persen_pace !== null && d.persen_pace !== undefined ? `${d.persen_pace}%` : '-';
+    teks += ` (${persenTampilan} dari target harian)`;
     teks += '\n\n';
   }
 
