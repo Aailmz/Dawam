@@ -811,18 +811,6 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
   catatLogBacaanHarian(jid, hariIniISO, nextId, bacaan.surat_ayat, statusPace);
   console.log(`✅ [Agent] Bacaan ${jenisDikirim} terkirim ke ${jid}: ${bacaan.surat_ayat} (id=${nextId})`);
 
-  if (user.group_sosial_jid && user.sudah_lapor_sesi_ini === 0) {
-    const namaUser = user.name || 'Sahabat';
-    const pesanReport = buatPesanAutoReport(namaUser, bacaan.surat_ayat);
-    try {
-      await sock.sendMessage(user.group_sosial_jid, { text: pesanReport });
-      setSudahLaporSesiIni(jid, true);
-      console.log(`✅ [Auto-report] Terkirim ke grup ${user.group_sosial_jid} untuk ${jid}`);
-    } catch (err) {
-      console.error('❌ Gagal kirim auto-report ke grup:', err.message);
-    }
-  }
-
   return {
     sukses: true,
     surat_ayat: bacaan.surat_ayat,
@@ -1364,16 +1352,21 @@ function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
   let teks = '📊 *Rekap Tilawah Hari Ini*\n\n';
 
   for (const d of sudahAktif) {
-    const emoji = d.status_pace === 'SUDAH_CAPAI_PACE' ? '🎉' : d.status_pace === 'DI_BAWAH_PACE' ? '📖' : '✅';
-    teks += `${emoji} *${d.nama}* — ${d.posisi_terakhir}`;
-    if (d.juz_sekarang) teks += ` (juz ${d.juz_sekarang})`;
-    teks += `\n   sudah menempuh ${d.halaman_ditempuh} halaman`;
-    if (d.selisih_dari_target) teks += `, ${d.selisih_dari_target} dari target`;
-    // Persentase WAJIB tampil tiap user -- null (target santai/pace normal, bukan berarti
-    // 0%) ditampilkan "-", bukan di-skip, bukan dipaksa jadi 0%.
-    const persenTampilan = d.persen_pace !== null && d.persen_pace !== undefined ? `${d.persen_pace}%` : '-';
-    teks += ` (${persenTampilan} dari target harian)`;
-    teks += '\n\n';
+    // persen_pace null artinya dua kemungkinan: (a) target santai tanpa hitungan
+    // pace harian, atau (b) belum baca sama sekali hari ini. Dibedakan pakai
+    // sudah_baca_hari_ini -- kalau belum baca, tampilkan 0% apapun target-nya.
+    let persenTampilan;
+    if (d.persen_pace !== null && d.persen_pace !== undefined) {
+      persenTampilan = `${d.persen_pace}%`;
+    } else if (!d.sudah_baca_hari_ini) {
+      persenTampilan = '0%';
+    } else {
+      persenTampilan = '-';
+    }
+
+    const emoji = d.persen_pace === 0 || persenTampilan === '0%' ? '💤' : d.status_pace === 'SUDAH_CAPAI_PACE' ? '🎉' : d.status_pace === 'DI_BAWAH_PACE' ? '📖' : '✅';
+
+    teks += `${emoji} *${d.nama}* — ${persenTampilan} dari target harian\n\n`;
   }
 
   if (belumAktif.length > 0) {
