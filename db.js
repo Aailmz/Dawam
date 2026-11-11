@@ -406,7 +406,7 @@ function hitungSisaProgressUser(jid) {
   const halamanDitempuh = hitungHalamanDitempuhDenganWrap(startBacaanId, posisiSekarang);
 
   const hariIniISOAwal = new Date().toISOString().slice(0, 10);
-  if (!user.target_juz_per_hari || user.target_juz_per_hari === '6' || !user.tanggal_mulai_baca) {
+  if (!user.target_juz_per_hari || !user.tanggal_mulai_baca) {
     return {
       ada_target: false,
       target_juz_per_hari: user.target_juz_per_hari || null,
@@ -415,7 +415,7 @@ function hitungSisaProgressUser(jid) {
       halaman_ditempuh: halamanDitempuh,
       total_halaman_keseluruhan: TOTAL_HALAMAN_KESELURUHAN,
       sudah_baca_hari_ini: user.tanggal_terakhir_baca === hariIniISOAwal,
-      // null = memang tidak relevan dihitung (target santai/belum mulai), BUKAN 0%.
+      // null = memang tidak relevan dihitung (belum ada target/belum mulai), BUKAN 0%.
       // Konsumen (rekap) WAJIB tampilkan field ini -- null ditampilkan sebagai "-" bukan di-skip.
       persen_pace: null,
     };
@@ -425,6 +425,7 @@ function hitungSisaProgressUser(jid) {
 
   let halamanPerHari;
   if (user.target_juz_per_hari === '12') halamanPerHari = HALAMAN_PER_JUZ / 12;
+  else if (user.target_juz_per_hari === '6') halamanPerHari = HALAMAN_PER_JUZ / 6;
   else if (user.target_juz_per_hari === '3') halamanPerHari = HALAMAN_PER_JUZ / 3;
   else if (user.target_juz_per_hari === '1') halamanPerHari = HALAMAN_PER_JUZ / 1;
   else {
