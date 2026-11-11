@@ -605,6 +605,10 @@ function tambahAnggotaGroup(groupJid, userJid) {
   ).run(groupJid, userJid);
 }
 
+function hapusAnggotaGroup(groupJid, userJid) {
+  db.prepare('DELETE FROM group_members WHERE group_jid = ? AND user_jid = ?').run(groupJid, userJid);
+}
+
 function getAnggotaGroup(groupJid) {
   return db.prepare('SELECT user_jid FROM group_members WHERE group_jid = ?').all(groupJid).map((r) => r.user_jid);
 }
@@ -753,6 +757,7 @@ module.exports = {
   setGroupWaktuMotivasiTerakhir,
   getAllGroupsAktif,
   tambahAnggotaGroup,
+  hapusAnggotaGroup,
   getAnggotaGroup,
   catatAktivitasGroup,
   getRekapProgressGroup,

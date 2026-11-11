@@ -48,6 +48,7 @@ const {
   setGroupWaktuMotivasiTerakhir,
   getAllGroupsAktif,
   tambahAnggotaGroup,
+  hapusAnggotaGroup,
   getAnggotaGroup,
   catatAktivitasGroup,
   getRekapProgressGroup,
@@ -274,6 +275,44 @@ async function startBot() {
       ).trim();
       console.log(`\n📩 Pesan masuk dari ${sender}: "${textAsli}"`);
       await handleIncomingMessage(sender, textAsli, text);
+    }
+  });
+
+  sock.ev.on('group-participants.update', async (update) => {
+    const { id: groupJid, participants, action } = update;
+
+    const group = getGroup(groupJid);
+    if (!group || group.is_aktif === 0) {
+      console.log(`(Grup ${groupJid} belum aktif, perubahan member diabaikan.)`);
+      return;
+    }
+
+    if (action === 'add') {
+      const jidBaruList = [];
+      for (const rawJid of participants) {
+        if (apakahJidBot(rawJid)) continue;
+        const jidTernormalisasi = await resolveSenderJidViaGroupMetadata(groupJid, rawJid);
+        tambahAnggotaGroup(groupJid, jidTernormalisasi);
+        jidBaruList.push(jidTernormalisasi);
+        console.log(`✅ Member baru terdeteksi join grup ${groupJid}: ${jidTernormalisasi}`);
+      }
+
+      if (jidBaruList.length > 0) {
+        const tagText = jidBaruList.map((jid) => `@${jid.split('@')[0]}`).join(' ');
+        const teks = `Halo ${tagText}, selamat datang di grup ini 🤍\n\nKalau mau ikutan lapor progress tilawah dan ditemani harian secara personal, tinggal kirim kata *"dawam"* ke chat pribadi Dawam ya 😊`;
+        try {
+          await sock.sendMessage(groupJid, { text: teks, mentions: jidBaruList });
+        } catch (err) {
+          console.error('❌ Gagal kirim sapaan member baru:', err.message);
+        }
+      }
+    } else if (action === 'remove') {
+      for (const rawJid of participants) {
+        if (apakahJidBot(rawJid)) continue;
+        const jidTernormalisasi = await resolveSenderJidViaGroupMetadata(groupJid, rawJid);
+        hapusAnggotaGroup(groupJid, jidTernormalisasi);
+        console.log(`➖ Member keluar dari grup ${groupJid}: ${jidTernormalisasi}`);
+      }
     }
   });
 
