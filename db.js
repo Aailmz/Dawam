@@ -438,8 +438,14 @@ function hitungSisaProgressUser(jid) {
     };
   }
 
-  const halamanTarget = Math.round(halamanPerHari * hariBerjalan);
-  const selisihHalaman = halamanTarget - halamanDitempuh;
+  // Target HARIAN murni -- tidak dikali hariBerjalan, tidak bawa-bawa defisit hari
+  // sebelumnya. Dibandingkan dengan halaman yang ditempuh HARI INI SAJA, bukan
+  // halamanDitempuh total sejak mulai.
+  const halamanTarget = Math.round(halamanPerHari);
+  const hariIniISOUntukLog = new Date().toISOString().slice(0, 10);
+  const logHariIni = getLogBacaanHarianByTanggal(jid, hariIniISOUntukLog);
+  const halamanDitempuhHariIni = logHariIni?.jumlah_kartu || 0;
+  const selisihHalaman = halamanTarget - halamanDitempuhHariIni;
 
   let status;
   if (selisihHalaman > 0) status = 'DI_BAWAH_PACE';
@@ -450,7 +456,7 @@ function hitungSisaProgressUser(jid) {
   // Cap ke 100% begitu capai/lewat target hari ini -- user yang jauh melampaui target
   // (misal baca banyak sekaligus) tetap ditampilkan 100%, bukan 130%/200% dst, karena
   // "progress hari ini" secara konsep selesai begitu nyampe 100%, sisanya kelebihan.
-  const persenPaceMentah = halamanTarget > 0 ? Math.round((halamanDitempuh / halamanTarget) * 100) : null;
+  const persenPaceMentah = halamanTarget > 0 ? Math.round((halamanDitempuhHariIni / halamanTarget) * 100) : null;
   const persenPace = persenPaceMentah !== null
     ? (status === 'SUDAH_CAPAI_PACE' || status === 'PAS_PACE' ? 100 : persenPaceMentah)
     : null;
