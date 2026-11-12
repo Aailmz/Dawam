@@ -3,7 +3,7 @@ const db = require('./db');
 const GROUP_JID = '120363412137382437@g.us';
 
 const NOMOR_LIST = [
-  '6281252010301',
+  '6281280077486',
 ];
 
 for (const nomor of NOMOR_LIST) {
