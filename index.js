@@ -269,9 +269,17 @@ async function startBot() {
 
     if (action === 'add') {
       const jidBaruList = [];
-      for (const rawJid of participants) {
+      for (const participant of participants) {
+        const rawJid = participant.id; // ambil string JID dari object
         if (apakahJidBot(rawJid)) continue;
-        const jidTernormalisasi = await resolveSenderJidViaGroupMetadata(groupJid, rawJid);
+
+        // phoneNumber sudah tersedia langsung di payload event (format @s.whatsapp.net),
+        // jadi tidak perlu lagi resolve lewat groupMetadata.
+        const jidTernormalisasi =
+          participant.phoneNumber && participant.phoneNumber.endsWith('@s.whatsapp.net')
+            ? participant.phoneNumber
+            : await resolveSenderJidViaGroupMetadata(groupJid, rawJid);
+
         tambahAnggotaGroup(groupJid, jidTernormalisasi);
         jidBaruList.push(jidTernormalisasi);
         console.log(`✅ Member baru terdeteksi join grup ${groupJid}: ${jidTernormalisasi}`);
@@ -287,9 +295,13 @@ async function startBot() {
         }
       }
     } else if (action === 'remove') {
-      for (const rawJid of participants) {
+      for (const participant of participants) {
+        const rawJid = participant.id; // sama, pastikan ambil .id
         if (apakahJidBot(rawJid)) continue;
-        const jidTernormalisasi = await resolveSenderJidViaGroupMetadata(groupJid, rawJid);
+        const jidTernormalisasi =
+          participant.phoneNumber && participant.phoneNumber.endsWith('@s.whatsapp.net')
+            ? participant.phoneNumber
+            : await resolveSenderJidViaGroupMetadata(groupJid, rawJid);
         hapusAnggotaGroup(groupJid, jidTernormalisasi);
         console.log(`➖ Member keluar dari grup ${groupJid}: ${jidTernormalisasi}`);
       }
