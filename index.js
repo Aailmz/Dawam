@@ -233,6 +233,18 @@ async function startBot() {
       BOT_PN_NORMALIZED = sock.user?.id?.split(':')[0]?.split('@')[0] || null;
       BOT_LID_NORMALIZED = sock.user?.lid?.split(':')[0]?.split('@')[0] || null;
       console.log(`🤖 BOT_PN_NORMALIZED: "${BOT_PN_NORMALIZED}", BOT_LID_NORMALIZED: "${BOT_LID_NORMALIZED}"`);
+
+      // WAJIB: supaya Baileys "kenal" semua grup yang sudah pernah di-invite SEBELUM
+      // listener ini aktif. Tanpa ini, group-participants.update bisa silently tidak
+      // ter-emit untuk grup yang belum pernah di-fetch metadatanya di sesi socket ini.
+      sock.groupFetchAllParticipating()
+        .then((grups) => {
+          console.log(`✅ groupFetchAllParticipating selesai, ${Object.keys(grups).length} grup dikenal.`);
+        })
+        .catch((err) => {
+          console.error('❌ Gagal groupFetchAllParticipating:', err.message);
+        });
+
       setupScheduler();
       setupSilentUserChecker();
       setupGroupMotivasiScheduler();
@@ -244,41 +256,9 @@ async function startBot() {
     }
   });
 
-  sock.ev.on('messages.upsert', async (m) => {
-    const message = m.messages[0];
-    if (!message.message || message.key.fromMe) return;
-
-    const remoteJid = message.key.remoteJid;
-    const isGroup = remoteJid.endsWith('@g.us');
-
-    const text = (
-      message.message.conversation ||
-      message.message.extendedTextMessage?.text ||
-      ''
-    )
-      .trim()
-      .toLowerCase();
-
-    if (isGroup) {
-      // Prioritaskan senderPn (biasanya sudah @s.whatsapp.net) supaya konsisten
-      // dengan JID yang dipakai di roster (normalizeParticipantJid) dan di chat personal.
-      const sender = message.key.senderPn || message.key.participant;
-      if (!sender) return; // tidak bisa identifikasi pengirim, abaikan
-      console.log(`\n📩 [GRUP ${remoteJid}] Pesan dari ${sender}: "${text}"`);
-      await handleIncomingGroupMessage(remoteJid, sender, text, message);
-    } else {
-      const sender = normalizeJid(message);
-      const textAsli = (
-        message.message.conversation ||
-        message.message.extendedTextMessage?.text ||
-        ''
-      ).trim();
-      console.log(`\n📩 Pesan masuk dari ${sender}: "${textAsli}"`);
-      await handleIncomingMessage(sender, textAsli, text);
-    }
-  });
-
   sock.ev.on('group-participants.update', async (update) => {
+    console.log('🔥 event grup masuk:', JSON.stringify(update));
+
     const { id: groupJid, participants, action } = update;
 
     const group = getGroup(groupJid);
@@ -313,6 +293,40 @@ async function startBot() {
         hapusAnggotaGroup(groupJid, jidTernormalisasi);
         console.log(`➖ Member keluar dari grup ${groupJid}: ${jidTernormalisasi}`);
       }
+    }
+  });
+
+  sock.ev.on('messages.upsert', async (m) => {
+    const message = m.messages[0];
+    if (!message.message || message.key.fromMe) return;
+
+    const remoteJid = message.key.remoteJid;
+    const isGroup = remoteJid.endsWith('@g.us');
+
+    const text = (
+      message.message.conversation ||
+      message.message.extendedTextMessage?.text ||
+      ''
+    )
+      .trim()
+      .toLowerCase();
+
+    if (isGroup) {
+      // Prioritaskan senderPn (biasanya sudah @s.whatsapp.net) supaya konsisten
+      // dengan JID yang dipakai di roster (normalizeParticipantJid) dan di chat personal.
+      const sender = message.key.senderPn || message.key.participant;
+      if (!sender) return; // tidak bisa identifikasi pengirim, abaikan
+      console.log(`\n📩 [GRUP ${remoteJid}] Pesan dari ${sender}: "${text}"`);
+      await handleIncomingGroupMessage(remoteJid, sender, text, message);
+    } else {
+      const sender = normalizeJid(message);
+      const textAsli = (
+        message.message.conversation ||
+        message.message.extendedTextMessage?.text ||
+        ''
+      ).trim();
+      console.log(`\n📩 Pesan masuk dari ${sender}: "${textAsli}"`);
+      await handleIncomingMessage(sender, textAsli, text);
     }
   });
 
