@@ -512,6 +512,7 @@ function hitungSisaProgressUser(jid) {
     halaman_ditempuh: halamanDitempuh,
     hari_berjalan: hariBerjalan,
     halaman_target_hari_ini: halamanTarget,
+    halaman_ditempuh_hari_ini: halamanDitempuhHariIni, // <-- tambahan
     total_halaman_keseluruhan: TOTAL_HALAMAN_KESELURUHAN,
     status,
     selisih_halaman: selisihHalaman,
@@ -697,7 +698,7 @@ function getRekapProgressGroup(groupJid) {
 
     return {
       nama: user.name || 'Sahabat',
-      jid, // dibutuhkan untuk mentions saat tag di grup
+      jid,
       sudah_aktivasi_personal: true,
       posisi_terakhir: bacaan?.surat_ayat || 'belum mulai baca',
       juz_sekarang: bacaan?.juz ?? null,
@@ -706,6 +707,8 @@ function getRekapProgressGroup(groupJid) {
       status_pace: sisaProgress.status || null,
       selisih_dari_target: sisaProgress.selisih_tampilan || null,
       persen_pace: sisaProgress.persen_pace ?? null,
+      halaman_ditempuh_hari_ini: sisaProgress.halaman_ditempuh_hari_ini ?? null, // <-- tambahan
+      halaman_target_hari_ini: sisaProgress.halaman_target_hari_ini ?? null,     // <-- tambahan
       sudah_baca_hari_ini: sisaProgress.sudah_baca_hari_ini ?? false,
     };
   });

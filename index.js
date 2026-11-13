@@ -251,7 +251,7 @@ async function startBot() {
       setupScheduler();
       setupSilentUserChecker();
       setupGroupMotivasiScheduler();
-      setupRekapHarianScheduler();
+      //setupRekapHarianScheduler();
       setupLelangIsyaScheduler();
       setupAlkahfiJumatScheduler();
       setupReminderJumatLakiScheduler();
@@ -948,22 +948,15 @@ async function kirimCardLelangPersonal(penerimaJid, pemilikJid) {
 async function kirimTawaranLelangKeGrup(groupJid) {
   const diBawahPace = getAnggotaDiBawahPaceHariIni(groupJid);
 
-  if (diBawahPace.length === 0) {
-    console.log(`(Grup ${groupJid}: tidak ada yang di bawah pace, lelang dilewati.)`);
-    return;
+  // Tetap siapkan data lelang di belakang layar (biar klaim_card_kawan tetap bisa jalan),
+  // TAPI teks pengumuman lelang ke grup dihilangkan dulu.
+  if (diBawahPace.length > 0) {
+    setTawaranLelangGrup(groupJid, diBawahPace);
   }
 
-  setTawaranLelangGrup(groupJid, diBawahPace);
-
-  const daftarNama = diBawahPace.map((d) => `• ${d.nama} (${d.selisih_tampilan} dari target)`).join('\n');
-  const teks = `🤍 Jelang Isya, ada beberapa sahabat yang masih kurang dari target hari ini:\n\n${daftarNama}\n\nYuk siapa yang mau bantu temenin baca, tinggal bilang "aku baca punya [nama] ya" di sini. Card lanjutannya nanti Dawam kirim ke chat pribadimu 📖`;
-
-  try {
-    await sock.sendMessage(groupJid, { text: teks });
-    console.log(`✅ Tawaran lelang terkirim ke grup ${groupJid} (${diBawahPace.length} orang di bawah pace).`);
-  } catch (err) {
-    console.error('❌ Gagal kirim tawaran lelang:', err.message);
-  }
+  // Yang dikirim ke grup sekarang laporan harian (persen + kurang berapa halaman),
+  // pindah dari jam 20:00 ke jam Isya.
+  await kirimRekapHarianKeGrup(groupJid, false, true);
 }
 
 // ---- §4.3: Deteksi kecepatan & tawaran lanjut ----
@@ -1424,9 +1417,6 @@ function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
   let teks = '📊 *Rekap Tilawah Hari Ini*\n\n';
 
   for (const d of sudahAktif) {
-    // persen_pace null artinya dua kemungkinan: (a) target santai tanpa hitungan
-    // pace harian, atau (b) belum baca sama sekali hari ini. Dibedakan pakai
-    // sudah_baca_hari_ini -- kalau belum baca, tampilkan 0% apapun target-nya.
     let persenTampilan;
     if (d.persen_pace !== null && d.persen_pace !== undefined) {
       persenTampilan = `${d.persen_pace}%`;
@@ -1438,7 +1428,14 @@ function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
 
     const emoji = d.persen_pace === 0 || persenTampilan === '0%' ? '💤' : d.status_pace === 'SUDAH_CAPAI_PACE' ? '🎉' : d.status_pace === 'DI_BAWAH_PACE' ? '📖' : '✅';
 
-    teks += `${emoji} *${d.nama}* — ${persenTampilan} dari target harian\n\n`;
+    // Keterangan halaman -- cuma ditampilkan kalau user punya target harian.
+    let keteranganHalaman = '';
+    if (d.halaman_target_hari_ini !== null && d.halaman_target_hari_ini !== undefined) {
+      const ditempuh = d.halaman_ditempuh_hari_ini ?? 0;
+      keteranganHalaman = ` (${ditempuh}/${d.halaman_target_hari_ini} halaman)`;
+    }
+
+    teks += `${emoji} *${d.nama}* — ${persenTampilan} dari target harian${keteranganHalaman}\n\n`;
   }
 
   if (belumAktif.length > 0) {
