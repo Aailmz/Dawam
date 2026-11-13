@@ -36,6 +36,9 @@ const {
   setModeArabSaja,
   setWaktuTawaranTerakhir,
   setGroupSosialUser,
+  isUserActive,
+  nonaktifkanUser,
+  aktifkanKembaliUser,
   // onboarding conversational
   getFieldOnboardingKosong,
   updateUserFields,
@@ -132,7 +135,7 @@ function tandaiTawaranSudahDiklaim(groupJid, userJid) {
 
 function getRegisteredTargets() {
   return getAllUsers()
-    .filter((u) => u.is_registered === 1)
+    .filter((u) => u.is_registered === 1 && u.is_active === 1)
     .map((u) => u.jid);
 }
 
@@ -474,6 +477,10 @@ async function handleIncomingMessage(jid, textAsli, textLower) {
 
   const user = getUser(jid);
   const state = user.state;
+
+  if (user.is_active === 0) {
+    console.log(`(User ${jid} berstatus nonaktif, tetap diteruskan ke agent supaya bisa reaktivasi natural.)`);
+  }
 
   // Re-check auto-link grup sosial tiap chat personal, bukan cuma sekali saat
   // registrasi -- kasus Mirza: onboarding personal duluan SEBELUM grupnya
@@ -1158,7 +1165,7 @@ function setupReminderJumatLakiScheduler() {
 
   cron.schedule(cronExpr, async () => {
     console.log('\n🕌 Mengirim reminder Jumat (laki-laki)...');
-    const targets = getAllUsers().filter((u) => u.is_registered === 1 && u.gender === 'L');
+    const targets = getAllUsers().filter((u) => u.is_registered === 1 && u.is_active === 1 && u.gender === 'L');
     if (targets.length === 0) {
       console.log('⚠️  Tidak ada user laki-laki teraktivasi, reminder Jumat dilewati.');
       return;

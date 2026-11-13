@@ -55,6 +55,7 @@ const LABEL_STATE = {
   WAITING_LANJUT_SESI: 'User baru saja selesai satu kartu bacaan dan ditanya mau lanjut kartu berikutnya atau cukup, karena targetnya cepat.',
   WAITING_ALASAN_TIDAK_BACA: 'User baru saja ditanya dengan lembut kenapa belum sempat tilawah beberapa kali terakhir.',
   WAITING_KONFIRMASI_ALKAHFI: 'User baru saja ditawari cicilan baca Surat Al-Kahfi (fitur Jumat), sedang menunggu jawaban ya/nanti.',
+  WAITING_ALASAN_BERHENTI: 'User baru saja bilang mau berhenti/nonaktifin Dawam, dan baru saja ditanya alasan/feedback-nya. Tunggu jawabannya (atau dia skip/tidak mau cerita), lalu panggil tool minta_berhenti_dawam.',
 };
 
 function buatKonteksState(state) {
@@ -72,10 +73,13 @@ function buatPromptPersonal(user) {
   const modeInfo = user.mode_baca_arab_saja === 0
     ? '\nUser SEDANG dalam mode terjemah-saja (halangan). Bacaan yang dikirim hanya terjemah, bukan Arab.'
     : '';
+  const statusAktifInfo = user.is_active === 0
+    ? '\nPENTING: user ini statusnya SEDANG NONAKTIF (sebelumnya berhenti dari Dawam, tidak menerima reminder sholat/tilawah otomatis). Kalau dia cerita/ngobrol biasa, tetap ladenin natural. Kalau dia menyiratkan mau aktif lagi/lanjut lagi, panggil tool aktifkan_kembali_dawam.'
+    : '';
 
   return `${KARAKTER_DAWAM}
 
-Kamu sedang mengobrol personal (1-on-1) dengan ${namaUser}.${genderInfo}${modeInfo}
+Kamu sedang mengobrol personal (1-on-1) dengan ${namaUser}.${genderInfo}${modeInfo}${statusAktifInfo}
 
 FAKTA TETAP SOAL DAWAM (pakai ini kalau user tanya soal Dawam, JANGAN mengarang di luar ini):
 ${FAKTA_TENTANG_DAWAM}
@@ -90,6 +94,8 @@ CARA KERJA:
 - Kalau user eksplisit minta mulai/pindah ke surat tertentu, panggil set_posisi_bacaan.
 - Kalau user minta share/pamer/broadcast progress atau pesan apapun ke grup sosialnya, JANGAN langsung panggil tool. Konfirmasi dulu isi pesannya secara natural (misal: "oke, mau aku kirim ke grup ya: '...', mau lanjut?"). Baru setelah user bilang ya/setuju, panggil tool broadcast_ke_grup_sosial dengan isi pesan yang sudah disepakati.
 - Kalau user bilang belum terhubung ke grup sosial manapun saat minta broadcast, kasih tau dia perlu chat di dalam grup itu dulu (kirim pesan apa aja di sana) biar otomatis terhubung.
+- Kalau user bilang mau berhenti/stop/nonaktifin Dawam/udah gamau diingetin lagi (dalam bentuk apapun), JANGAN langsung panggil tool. Tanggapi dulu dengan hangat TANPA menghakimi, dan tanyakan secara natural alasan/masukan kenapa mau berhenti (buat bahan perbaikan Dawam ke depan) -- boleh sekalian bilang dia boleh skip kalau tidak mau cerita. Setelah user menjawab alasannya ATAU eksplisit bilang tidak mau kasih alasan/skip, BARU panggil tool minta_berhenti_dawam (isi field feedback dari jawabannya, atau kosongkan kalau dia skip).
+- Kalau user yang statusnya nonaktif/sudah berhenti bilang mau aktif lagi/lanjut lagi/balik lagi, panggil tool aktifkan_kembali_dawam.
 - Kalau user cuma tanya soal Dawam (fitur, cara kerja), jawab langsung dari FAKTA TETAP di atas, tidak perlu tool.
 - Kalau cuma ngobrol biasa/sapaan/curhat di luar semua itu, balas natural sesuai karaktermu, tanpa tool.
 ${buatKonteksState(user.state)}

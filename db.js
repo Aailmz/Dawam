@@ -102,6 +102,15 @@ db.exec(`
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_log_bacaan_user_tgl ON log_bacaan_harian (user_jid, tanggal)`);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS feedback_berhenti (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_jid TEXT NOT NULL,
+    isi_feedback TEXT,          -- boleh null kalau user skip/tidak mau kasih alasan
+    waktu TEXT DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
 // Migrasi: tabel 'ayat' (generic image, Phase 1) sudah digantikan tabel 'bacaan'.
 const tabelLamaMasihAda = db
   .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='ayat'`)
@@ -139,6 +148,11 @@ tambahKolomJikaBelumAda('users', 'tanggal_terakhir_baca', 'TEXT');
 // Posisi kedua khusus Jumat Al-Kahfi (poin 3), independen dari last_sent_bacaan_id utama.
 tambahKolomJikaBelumAda('users', 'last_sent_alkahfi_id', 'INTEGER DEFAULT 0');
 tambahKolomJikaBelumAda('users', 'tanggal_terakhir_alkahfi', 'TEXT');
+// Stop/resume subscription -- TERPISAH dari is_registered supaya data (progress,
+// preferensi, nama, dll) tidak hilang saat user berhenti sementara lalu balik lagi.
+// is_registered tetap artinya "pernah onboarding", is_active artinya "lagi nerima layanan sekarang".
+tambahKolomJikaBelumAda('users', 'is_active', 'INTEGER DEFAULT 1');
+tambahKolomJikaBelumAda('users', 'waktu_berhenti_terakhir', 'TEXT');
 
 // ========== BACAAN ==========
 
@@ -302,6 +316,32 @@ function setGroupSosialJikaBelumAda(jid, groupJid) {
   if (user.group_sosial_jid) return false;
   db.prepare('UPDATE users SET group_sosial_jid = ? WHERE jid = ?').run(groupJid, jid);
   return true;
+}
+
+// ========== STOP / RESUME SUBSCRIPTION ==========
+
+function isUserActive(jid) {
+  const user = getOrCreateUser(jid);
+  // User lama sebelum kolom ini ada defaultnya 1 (DEFAULT 1 di ALTER), jadi aman.
+  return user.is_active === 1;
+}
+
+function nonaktifkanUser(jid) {
+  getOrCreateUser(jid);
+  db.prepare(
+    'UPDATE users SET is_active = 0, waktu_berhenti_terakhir = ? WHERE jid = ?'
+  ).run(new Date().toISOString(), jid);
+}
+
+function aktifkanKembaliUser(jid) {
+  getOrCreateUser(jid);
+  db.prepare('UPDATE users SET is_active = 1 WHERE jid = ?').run(jid);
+}
+
+function simpanFeedbackBerhenti(jid, isiFeedback) {
+  db.prepare(
+    'INSERT INTO feedback_berhenti (user_jid, isi_feedback) VALUES (?, ?)'
+  ).run(jid, isiFeedback || null);
 }
 
 // ========== ONBOARDING CONVERSATIONAL (phase 2) ==========
@@ -531,7 +571,7 @@ function getAnggotaDiBawahPaceHariIni(groupJid) {
   const hasil = [];
   for (const jid of anggotaJids) {
     const user = getUser(jid);
-    if (user.is_registered !== 1) continue;
+    if (user.is_registered !== 1 || user.is_active !== 1) continue;
     const sisa = hitungSisaProgressUser(jid);
     if (sisa.ada_target && sisa.status === 'DI_BAWAH_PACE') {
       hasil.push({ jid, nama: user.name || 'Sahabat', selisih_tampilan: sisa.selisih_tampilan });
@@ -735,6 +775,11 @@ module.exports = {
   setGroupSosialUser,
   setSudahLaporSesiIni,
   setGroupSosialJikaBelumAda,
+  // stop/resume subscription
+  isUserActive,
+  nonaktifkanUser,
+  aktifkanKembaliUser,
+  simpanFeedbackBerhenti,
 
   // onboarding conversational
   FIELD_ONBOARDING_WAJIB,

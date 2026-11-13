@@ -129,6 +129,31 @@ const TOOLS_PERSONAL = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'minta_berhenti_dawam',
+      description: 'Hentikan sementara layanan Dawam untuk user ini (berhenti dapat reminder sholat & tilawah). WAJIB panggil tool ini HANYA SETELAH user benar-benar mengkonfirmasi mau berhenti DAN sudah diberi kesempatan kasih feedback/alasan (atau eksplisit bilang skip/tidak mau kasih alasan). JANGAN panggil di awal begitu user baru bilang "mau berhenti" -- tanya dulu alasannya secara natural, baru panggil tool ini setelah dia jawab (atau bilang tidak mau/skip).',
+      parameters: {
+        type: 'object',
+        properties: {
+          feedback: {
+            type: 'string',
+            description: 'Alasan/feedback berhenti dari user, apa adanya. Kosongkan/jangan isi field ini (omit) kalau user eksplisit tidak mau kasih alasan/skip.',
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'aktifkan_kembali_dawam',
+      description: 'Aktifkan kembali layanan Dawam untuk user yang sebelumnya berhenti/nonaktif. Panggil kalau user yang statusnya nonaktif bilang mau lanjut/aktif lagi/balik lagi.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
 ];
 
 // ========== SCHEMA — GRUP ==========
@@ -319,6 +344,30 @@ async function eksekusiTanyaBacaanHariLain({ tanggal_relatif }, konteks) {
   };
 }
 
+async function eksekusiMintaBerhentiDawam({ feedback }, konteks) {
+  if (feedback) {
+    db.simpanFeedbackBerhenti(konteks.jid, feedback);
+  }
+  db.nonaktifkanUser(konteks.jid);
+  return {
+    sukses: true,
+    feedback_tersimpan: !!feedback,
+    catatan_untuk_ai: 'Dawam berhasil dinonaktifkan untuk user ini. Beri tahu dengan hangat bahwa reminder sholat & tilawah akan berhenti, TANPA menghakimi keputusannya, dan beri tahu dia bisa aktif lagi kapan saja cukup dengan bilang ke Dawam (misal "aktifin lagi" / "lanjut lagi") kapanpun dia mau.',
+  };
+}
+
+async function eksekusiAktifkanKembaliDawam(_, konteks) {
+  const user = db.getUser(konteks.jid);
+  if (user.is_active === 1) {
+    return { sukses: false, pesan: 'User sudah dalam status aktif sebelumnya.' };
+  }
+  db.aktifkanKembaliUser(konteks.jid);
+  return {
+    sukses: true,
+    catatan_untuk_ai: 'Dawam berhasil diaktifkan kembali. Sambut hangat, beri tahu singkat bahwa reminder sholat & tilawah akan jalan lagi seperti biasa (progress & data lama tetap tersimpan, tidak hilang).',
+  };
+}
+
 async function eksekusiBroadcastKeGrupSosial({ isi_pesan }, konteks) {
   const user = db.getUser(konteks.jid);
   if (!user.group_sosial_jid) {
@@ -351,6 +400,8 @@ const EKSEKUTOR_PERSONAL = {
   set_posisi_bacaan: eksekusiSetPosisiBacaan,
   broadcast_ke_grup_sosial: eksekusiBroadcastKeGrupSosial,
   tanya_bacaan_hari_lain: eksekusiTanyaBacaanHariLain,
+  minta_berhenti_dawam: eksekusiMintaBerhentiDawam,
+  aktifkan_kembali_dawam: eksekusiAktifkanKembaliDawam,
 };
 
 // ========== EKSEKUTOR — GRUP ==========
