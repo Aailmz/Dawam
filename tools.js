@@ -133,13 +133,13 @@ const TOOLS_PERSONAL = [
     type: 'function',
     function: {
       name: 'minta_berhenti_dawam',
-      description: 'Hentikan sementara layanan Dawam untuk user ini (berhenti dapat reminder sholat & tilawah). WAJIB panggil tool ini HANYA SETELAH user benar-benar mengkonfirmasi mau berhenti DAN sudah diberi kesempatan kasih feedback/alasan (atau eksplisit bilang skip/tidak mau kasih alasan). JANGAN panggil di awal begitu user baru bilang "mau berhenti" -- tanya dulu alasannya secara natural, baru panggil tool ini setelah dia jawab (atau bilang tidak mau/skip).',
+      description: 'Hentikan sementara layanan Dawam untuk user ini (berhenti dapat reminder sholat & tilawah). WAJIB panggil tool ini HANYA SETELAH user mengkonfirmasi mau berhenti DAN sudah diberi kesempatan kasih feedback/alasan. JANGAN panggil di awal begitu user baru bilang "mau berhenti" -- tanya dulu alasannya secara natural, baru panggil tool ini setelah dia jawab.',
       parameters: {
         type: 'object',
         properties: {
           feedback: {
             type: 'string',
-            description: 'Alasan/feedback berhenti dari user, apa adanya. Kosongkan/jangan isi field ini (omit) kalau user eksplisit tidak mau kasih alasan/skip.',
+            description: 'Alasan/feedback berhenti dari user, apa adanya.',
           },
         },
         required: [],
