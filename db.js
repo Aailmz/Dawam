@@ -558,6 +558,27 @@ function catatLogBacaanHarian(userJid, tanggalISO, bacaanId, suratAyat, statusPa
   }
 }
 
+// Laporan manual (mode reminder-saja, tanpa kartu). Nambahin ke jumlah_kartu hari itu
+// sebagai representasi "halaman dibaca", reuse kolom yang sama dengan mode kartu
+// supaya hitungSisaProgressUser tetap konsisten tanpa perlu kolom baru.
+function catatLaporanBacaanManual(userJid, tanggalISO, jumlahHalaman) {
+  const existing = db
+    .prepare('SELECT * FROM log_bacaan_harian WHERE user_jid = ? AND tanggal = ?')
+    .get(userJid, tanggalISO);
+
+  if (!existing) {
+    db.prepare(`
+      INSERT INTO log_bacaan_harian (user_jid, tanggal, jumlah_kartu)
+      VALUES (?, ?, ?)
+    `).run(userJid, tanggalISO, jumlahHalaman);
+  } else {
+    db.prepare(`
+      UPDATE log_bacaan_harian SET jumlah_kartu = jumlah_kartu + ?
+      WHERE user_jid = ? AND tanggal = ?
+    `).run(jumlahHalaman, userJid, tanggalISO);
+  }
+}
+
 // Dipakai buat jawab "kemarin baca apa" -- knowledge gak cuma hari ini.
 function getLogBacaanHarianByTanggal(userJid, tanggalISO) {
   return db
@@ -832,6 +853,7 @@ module.exports = {
   getLogBacaanHarianByTanggal,
   getLogBacaanHarianRange,
   getAnggotaDiBawahPaceHariIni,
+  catatLaporanBacaanManual,
 
   // Jumat Al-Kahfi
   getBacaanAlkahfiById,

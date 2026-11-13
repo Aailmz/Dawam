@@ -22,6 +22,23 @@ const TOOLS_PERSONAL = [
   {
     type: 'function',
     function: {
+      name: 'lapor_bacaan_manual',
+      description: 'Catat laporan bacaan manual dari user yang sedang mode reminder-saja (bentuk_bacaan="reminder", tanpa kartu gambar). WAJIB panggil ini kalau user melaporkan sudah baca berapa halaman hari ini. JANGAN panggil untuk user mode kartu -- progress mereka sudah otomatis tercatat lewat kirim_bacaan_lanjutan.',
+      parameters: {
+        type: 'object',
+        properties: {
+          jumlah_halaman: {
+            type: 'number',
+            description: 'Perkiraan jumlah halaman yang BARU SAJA dibaca user HARI INI, sesuai yang disebutkan/bisa diestimasi dari pesan user. Kalau user cuma bilang "udah baca" tanpa ada angka/kuantitas sama sekali, JANGAN panggil tool ini -- tanya dulu kira-kira berapa halaman.',
+          },
+        },
+        required: ['jumlah_halaman'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'kirim_terjemah_bacaan',
       description: 'Kirim gambar terjemah dari bacaan Arab yang BARU SAJA dikirim (posisi yang sama, bukan lanjut ke ayat berikutnya). Panggil HANYA kalau user minta lihat artinya setelah baca Arab.',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -264,6 +281,40 @@ const TOOLS_GRUP = [
 // kirimBacaanLanjutan/kirimTerjemahBacaan adalah callback dari index.js (butuh akses sock),
 // sama pola dengan konteks.kirimPesan di Harga Petani.
 
+async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
+  const user = db.getUser(konteks.jid);
+
+  if (user.bentuk_bacaan !== 'reminder') {
+    return { sukses: false, pesan: 'User ini mode kartu, progress sudah otomatis tercatat, tidak perlu lapor manual.' };
+  }
+
+  // "Melenceng" -- angka tidak masuk akal (negatif, nol, atau kelewat besar buat sehari).
+  if (typeof jumlah_halaman !== 'number' || jumlah_halaman <= 0 || jumlah_halaman > 60) {
+    const sisa = db.hitungSisaProgressUser(konteks.jid);
+    return {
+      sukses: false,
+      halaman_target_hari_ini: sisa.halaman_target_hari_ini ?? null,
+      target_juz_per_hari: user.target_juz_per_hari || 'belum ditentukan',
+      catatan_untuk_ai: `Angka yang dilaporkan user (${jumlah_halaman} halaman) kelihatan tidak masuk akal. JANGAN dicatat. Tegur dengan lembut, minta user infokan ulang jumlah halaman yang lebih jelas/masuk akal ke Dawam, dan sebutkan target hariannya biar ada acuan: 1 juz per ${user.target_juz_per_hari || '?'} hari (sekitar ${sisa.halaman_target_hari_ini ?? '?'} halaman/hari).`,
+    };
+  }
+
+  const hariIniISO = new Date().toISOString().slice(0, 10);
+  db.catatLaporanBacaanManual(konteks.jid, hariIniISO, jumlah_halaman);
+  db.setTanggalTerakhirBaca(konteks.jid, hariIniISO);
+  db.resetNoResponse(konteks.jid);
+
+  const sisa = db.hitungSisaProgressUser(konteks.jid);
+  return {
+    sukses: true,
+    halaman_dilaporkan: jumlah_halaman,
+    halaman_ditempuh_hari_ini: sisa.halaman_ditempuh_hari_ini,
+    halaman_target_hari_ini: sisa.halaman_target_hari_ini,
+    status_pace: sisa.status,
+    selisih_dari_target: sisa.selisih_tampilan,
+    catatan_untuk_ai: 'Laporan berhasil dicatat. Apresiasi singkat, sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).',
+  };
+}
 async function eksekusiGetProgressUser(_, konteks) {
   const user = db.getUser(konteks.jid);
   const bacaan = db.getBacaanById(user.last_sent_bacaan_id);
@@ -471,6 +522,7 @@ const EKSEKUTOR_PERSONAL = {
   aktifkan_kembali_dawam: eksekusiAktifkanKembaliDawam,
   atur_fitur_dawam: eksekusiAturFiturDawam,
   get_pengaturan_user: eksekusiGetPengaturanUser,
+  lapor_bacaan_manual: eksekusiLaporBacaanManual,
 };
 
 // ========== EKSEKUTOR — GRUP ==========
