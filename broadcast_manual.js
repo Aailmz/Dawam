@@ -12,14 +12,11 @@ const { getAllGroupsAktif } = require('./db');
 
 const PESAN_PENGUMUMAN_FITUR_BERHENTI =
   `Assalamu'alaikum, Sahabat Dawam semua 🤍\n\n` +
-  `Ada kabar baru nih dari Dawam 📣\n\n` +
-  `Mulai sekarang, kalau kamu lagi butuh jeda (sibuk, capek, atau alasan apapun) dan mau istirahat dulu dari reminder sholat & tilawah, kamu bisa bilang langsung ke Dawam di chat pribadi, misalnya:\n` +
-  `*"aku mau berhenti dulu"* atau *"stop dulu ya"*\n\n` +
-  `Dawam akan tanya alasannya dulu, terus reminder bakal berhenti. Tenang aja, progress & data kamu AMAN, nggak hilang 🤍\n\n` +
-  `Kalau udah siap lanjut lagi kapanpun itu, tinggal bilang aja ke chat pribadi Dawam:\n` +
-  `*"aktifin lagi"* atau *"lanjut lagi"*\n\n` +
-  `...dan semuanya bakal jalan lagi dari posisi terakhirmu, nggak perlu onboarding ulang 😊\n\n` +
-  `Semoga ini bikin perjalanan tilawah kita makin nyaman ya, tanpa ada beban. Barakallahu fiikum 🌙`;
+  `Mau kasih info dulu nih 😅\n\n` +
+  `Dawam masih dalam tahap pengembangan, dan dalam waktu dekat bakal ada beberapa perubahan cukup besar di belakang layar (bukan cuma nambah fitur kecil-kecil lagi).\n\n` +
+  `Karena itu, mohon maaf dari sekarang kalau sewaktu-waktu ada hal yang kerasa aneh, nyangkut, salah hitung, atau tiba-tiba beda dari biasanya ya. Itu bagian dari proses, bukan kamu yang salah pakai 🙏\n\n` +
+  `Kalau nemu yang aneh-aneh, boleh banget langsung cerita ke Dawam di chat pribadi, itu bakal sangat membantu buat perbaikan ke depannya.\n\n` +
+  `Makasih banyak udah sabar nemenin Dawam belajar jadi lebih baik 🤍 Semoga tilawah kita tetap lancar di tengah proses ini. Barakallahu fiikum 🌙`;
 
 // ========== HELPER ==========
 
