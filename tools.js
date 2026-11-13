@@ -352,16 +352,21 @@ async function eksekusiAturFiturDawam(args, konteks) {
 
 async function eksekusiGetPengaturanUser(_, konteks) {
   const user = db.getUser(konteks.jid);
+  const emoji = (aktif) => (aktif ? '✅' : '❌');
+
+  const baris = [
+    `${emoji(user.reminder_sholat_aktif !== 0)} Reminder sholat 5 waktu: ${user.reminder_sholat_aktif !== 0 ? 'aktif' : 'nonaktif'}`,
+    `${emoji(user.tawaran_tilawah_aktif !== 0)} Tawaran tilawah: ${user.tawaran_tilawah_aktif !== 0 ? `aktif${user.bentuk_bacaan === 'reminder' ? ' (versi teks, tanpa kartu gambar)' : ' (kirim kartu gambar)'}` : 'nonaktif'}`,
+    `${emoji(user.tawaran_alkahfi_aktif !== 0)} Tawaran Al-Kahfi (Jumat): ${user.tawaran_alkahfi_aktif !== 0 ? 'aktif' : 'nonaktif'}`,
+  ];
+  if (user.gender === 'L') {
+    baris.push(`${emoji(user.reminder_jumat_laki_aktif !== 0)} Reminder Jumat laki-laki: ${user.reminder_jumat_laki_aktif !== 0 ? 'aktif' : 'nonaktif'}`);
+  }
+
   return {
     sukses: true,
-    reminder_sholat: user.reminder_sholat_aktif !== 0 ? 'aktif' : 'nonaktif',
-    tawaran_tilawah: user.tawaran_tilawah_aktif !== 0 ? 'aktif' : 'nonaktif',
-    tawaran_alkahfi: user.tawaran_alkahfi_aktif !== 0 ? 'aktif' : 'nonaktif',
-    reminder_jumat_laki: user.gender === 'L'
-      ? (user.reminder_jumat_laki_aktif !== 0 ? 'aktif' : 'nonaktif')
-      : 'tidak relevan (bukan laki-laki)',
-    bentuk_bacaan: user.bentuk_bacaan === 'reminder' ? 'reminder saja (tanpa kartu gambar)' : 'kartu (kirim gambar seperti biasa)',
-    catatan_untuk_ai: 'Sampaikan status di atas apa adanya ke user secara ringkas dan natural, format bebas, JANGAN tambahkan field yang tidak ada di data ini.',
+    teks_pengaturan: baris.join('\n'),
+    catatan_untuk_ai: 'Kirim field teks_pengaturan PERSIS APA ADANYA (list yang sudah jadi), boleh tambah 1 kalimat pembuka singkat sebelum list dan tawaran mau ubah apa di akhir, TAPI JANGAN mengubah/menyusun ulang isi list itu sendiri.',
   };
 }
 
