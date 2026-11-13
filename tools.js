@@ -81,7 +81,7 @@ const TOOLS_PERSONAL = [
     type: 'function',
     function: {
       name: 'set_posisi_bacaan',
-      description: 'Pindahkan posisi bacaan user ke surat tertentu (bukan lanjut otomatis dari posisi terakhir). Panggil kalau user eksplisit minta mulai/pindah ke surat tertentu.',
+      description: 'HANYA untuk user yang MULAI PERTAMA KALI minta pindah ke surat yang BELUM pernah dia baca sebelumnya di progress khataman utamanya (misal "mulai dari Ar-Rahman aja"). JANGAN PERNAH panggil ini kalau: (1) user minta "lanjut"/"balik lagi" ke surat yang sebelumnya SUDAH dia baca (termasuk balik ke Al-Baqarah setelah mampir ke surat lain) -- itu artinya last_sent_bacaan_id SUDAH berubah karena hal lain dan harus dibenerin manual, BUKAN di-reset lagi; (2) untuk Al-Kahfi dalam bentuk apapun -- Al-Kahfi PUNYA TRACKING SENDIRI (last_sent_alkahfi_id) lewat tool kirim_card_alkahfi_lanjutan, TIDAK ADA tool ini yang boleh dipanggil untuknya. Tool ini mereset start_bacaan_id, jadi salah pakai = progress user hilang.',
       parameters: {
         type: 'object',
         properties: {
