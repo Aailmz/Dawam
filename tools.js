@@ -39,6 +39,27 @@ const TOOLS_PERSONAL = [
   {
     type: 'function',
     function: {
+      name: 'lapor_bacaan_by_ayat',
+      description: 'Catat progress bacaan berdasarkan surat+ayat yang disebut user (bukan jumlah halaman), dipakai untuk user mode reminder-saja supaya tidak ada ketidaksesuaian antara card Dawam dan halaman fisik mushaf/app user. Posisi akan di-set ke card yang mengandung ayat tersebut. WAJIB panggil ini (bukan lapor_bacaan_manual) kalau user menyebutkan surat+ayat spesifik, misal "udah sampe Al-Baqarah ayat 50".',
+      parameters: {
+        type: 'object',
+        properties: {
+          nama_surat: {
+            type: 'string',
+            description: 'Nama surat yang disebutkan user, apa adanya (contoh: "Al-Baqarah").',
+          },
+          nomor_ayat: {
+            type: 'number',
+            description: 'Nomor ayat yang disebutkan user.',
+          },
+        },
+        required: ['nama_surat', 'nomor_ayat'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'kirim_terjemah_bacaan',
       description: 'Kirim gambar terjemah dari bacaan Arab yang BARU SAJA dikirim (posisi yang sama, bukan lanjut ke ayat berikutnya). Panggil HANYA kalau user minta lihat artinya setelah baca Arab.',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -288,7 +309,6 @@ async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
     return { sukses: false, pesan: 'User ini mode kartu, progress sudah otomatis tercatat, tidak perlu lapor manual.' };
   }
 
-  // "Melenceng" -- angka tidak masuk akal (negatif, nol, atau kelewat besar buat sehari).
   if (typeof jumlah_halaman !== 'number' || jumlah_halaman <= 0 || jumlah_halaman > 60) {
     const sisa = db.hitungSisaProgressUser(konteks.jid);
     return {
@@ -299,7 +319,24 @@ async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
     };
   }
 
+  // Fix: cek TOTAL akumulasi hari ini (termasuk laporan sebelumnya hari yang sama)
+  // supaya user tidak bisa lapor "20 halaman" berkali-kali jadi ratusan dalam sehari.
   const hariIniISO = new Date().toISOString().slice(0, 10);
+  const logHariIni = db.getLogBacaanHarianByTanggal(konteks.jid, hariIniISO);
+  const sudahDilaporkanHariIni = logHariIni?.jumlah_kartu || 0;
+  const totalSetelahIni = sudahDilaporkanHariIni + jumlah_halaman;
+
+  const BATAS_WAJAR_PER_HARI = 60; // ~2 juz, batas atas yang masih masuk akal untuk 1 hari
+  if (totalSetelahIni > BATAS_WAJAR_PER_HARI) {
+    const sisa = db.hitungSisaProgressUser(konteks.jid);
+    return {
+      sukses: false,
+      sudah_dilaporkan_hari_ini: sudahDilaporkanHariIni,
+      halaman_target_hari_ini: sisa.halaman_target_hari_ini ?? null,
+      catatan_untuk_ai: `User sudah lapor ${sudahDilaporkanHariIni} halaman hari ini, ditambah laporan baru ${jumlah_halaman} halaman jadi total ${totalSetelahIni} -- ini kelihatan tidak masuk akal untuk satu hari. JANGAN dicatat. Tegur dengan lembut, tanya ulang apakah ini laporan susulan dari hari lain (bukan hari ini) atau memang ada salah sebut angka.`,
+    };
+  }
+
   db.catatLaporanBacaanManual(konteks.jid, hariIniISO, jumlah_halaman);
   db.setTanggalTerakhirBaca(konteks.jid, hariIniISO);
   db.resetNoResponse(konteks.jid);
@@ -313,6 +350,46 @@ async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
     status_pace: sisa.status,
     selisih_dari_target: sisa.selisih_tampilan,
     catatan_untuk_ai: 'Laporan berhasil dicatat. Apresiasi singkat, sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).',
+  };
+}
+
+async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
+  const user = db.getUser(konteks.jid);
+
+  if (user.bentuk_bacaan !== 'reminder') {
+    return { sukses: false, pesan: 'User ini mode kartu, progress sudah otomatis tercatat, tidak perlu lapor manual.' };
+  }
+
+  const bacaanDitemukan = db.cariBacaanBySuratDanAyat(nama_surat, nomor_ayat);
+  if (!bacaanDitemukan) {
+    return {
+      sukses: false,
+      pesan: `Tidak ditemukan card yang mengandung "${nama_surat}" ayat ${nomor_ayat}.`,
+      catatan_untuk_ai: `Data belum tersedia untuk ayat spesifik ini (kemungkinan data belum lengkap di sistem). Minta maaf dengan lembut, tawarkan dia lapor pakai perkiraan jumlah halaman saja (tool lapor_bacaan_manual) sebagai alternatif.`,
+    };
+  }
+
+  // Set posisi persis ke card yang ketemu (bukan +1 dari posisi lama) -- beda dengan
+  // kirim_bacaan_lanjutan yang selalu nambah incremental.
+  db.updateLastSentBacaanId(konteks.jid, bacaanDitemukan.id);
+
+  const hariIniISO = new Date().toISOString().slice(0, 10);
+  db.setTanggalTerakhirBaca(konteks.jid, hariIniISO);
+  db.resetNoResponse(konteks.jid);
+
+  // Catat ke log harian juga supaya konsisten dengan hitungSisaProgressUser (persen_pace
+  // hari ini dihitung dari jumlah_kartu di log_bacaan_harian) -- reuse 1 "kartu" per lapor.
+  db.catatLogBacaanHarian(konteks.jid, hariIniISO, bacaanDitemukan.id, bacaanDitemukan.surat_ayat, null);
+
+  const sisa = db.hitungSisaProgressUser(konteks.jid);
+  return {
+    sukses: true,
+    posisi_baru: bacaanDitemukan.surat_ayat,
+    halaman_ditempuh_hari_ini: sisa.halaman_ditempuh_hari_ini,
+    halaman_target_hari_ini: sisa.halaman_target_hari_ini,
+    status_pace: sisa.status,
+    selisih_dari_target: sisa.selisih_tampilan,
+    catatan_untuk_ai: `Posisi berhasil disinkronkan ke ${bacaanDitemukan.surat_ayat}. Apresiasi singkat, sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).`,
   };
 }
 async function eksekusiGetProgressUser(_, konteks) {
@@ -523,6 +600,7 @@ const EKSEKUTOR_PERSONAL = {
   atur_fitur_dawam: eksekusiAturFiturDawam,
   get_pengaturan_user: eksekusiGetPengaturanUser,
   lapor_bacaan_manual: eksekusiLaporBacaanManual,
+  lapor_bacaan_by_ayat: eksekusiLaporBacaanByAyat,
 };
 
 // ========== EKSEKUTOR — GRUP ==========

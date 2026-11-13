@@ -502,13 +502,30 @@ async function handleIncomingMessage(jid, textAsli, textLower) {
     return;
   }
 
-  // Jumat Al-Kahfi: state machine sederhana terpisah dari agent, mirip ONBOARDING.
+    // Jumat Al-Kahfi: state machine sederhana terpisah dari agent, mirip ONBOARDING.
   if (state === 'WAITING_KONFIRMASI_ALKAHFI') {
     const intent = await groqAI.parseIntentJawaban(textAsli);
     if (intent === 'YA') {
       await kirimCardAlkahfiLanjutan(jid);
     }
     setUserState(jid, 'IDLE');
+    return;
+  }
+
+  // Fix: state-machine lama lain juga WAJIB dicek di sini sebelum lempar ke agent.
+  // Tanpa ini, pesan user yang sedang di state ini bisa "dicuri" agent tools.js
+  // (misal kirim_terjemah_bacaan dipanggil ulang padahal user cuma jawab "nanti"),
+  // menyebabkan dua jalur logic saling tabrak/dobel proses.
+  if (state === 'WAITING_CONFIRM') {
+    await handleJawabanTawaranNgaji(jid, textAsli);
+    return;
+  }
+  if (state === 'WAITING_CONFIRM_TERJEMAH') {
+    await handleJawabanTawaranTerjemah(jid, textAsli);
+    return;
+  }
+  if (state === 'WAITING_LANJUT_SESI') {
+    await handleJawabanLanjutSesi(jid, textAsli);
     return;
   }
 
@@ -864,18 +881,10 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
       catatan_untuk_ai: 'User sedang mode reminder-saja (tanpa kartu gambar), jadi posisi TIDAK otomatis bertambah. Kalau user lapor progress manual, cukup tanggapi natural tanpa tool set_posisi_bacaan.',
     };
   }
-  
+
   const idSebelumWrap = user.last_sent_bacaan_id + 1;
   let nextId = idSebelumWrap;
   if (nextId > 900) nextId = 1;
-
-  const startBacaanId = user.start_bacaan_id || 0;
-  const barusanKhatam = sudahKhatamSetelahWrap(startBacaanId, idSebelumWrap, nextId);
-  if (barusanKhatam) {
-    // Muter balik ke titik start -- anggap khatam, reset start supaya putaran
-    // berikutnya dihitung dari sini lagi (bukan dari id lama yang sudah terlewati).
-    setStartBacaanId(jid, nextId - 1 < 0 ? 900 : nextId - 1);
-  }
 
   const bacaan = getBacaanById(nextId);
   if (!bacaan) {
@@ -888,6 +897,14 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
   const terkirim = await kirimGambarBacaanMentah(jid, bacaan, jenisDikirim);
   if (!terkirim) {
     return { sukses: false, pesan: 'Gagal mengirim gambar bacaan.' };
+  }
+
+  // PENTING: hitung & commit wrap/khatam HANYA setelah gambar benar-benar terkirim,
+  // supaya kalau gagal kirim, start_bacaan_id/posisi tidak kadung berubah (fix bug).
+  const startBacaanId = user.start_bacaan_id || 0;
+  const barusanKhatam = sudahKhatamSetelahWrap(startBacaanId, idSebelumWrap, nextId);
+  if (barusanKhatam) {
+    setStartBacaanId(jid, nextId - 1 < 0 ? 900 : nextId - 1);
   }
 
   const hariIniISO = new Date().toISOString().slice(0, 10);

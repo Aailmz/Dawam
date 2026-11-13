@@ -159,6 +159,8 @@ tambahKolomJikaBelumAda('users', 'tawaran_tilawah_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'tawaran_alkahfi_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'reminder_jumat_laki_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'bentuk_bacaan', "TEXT DEFAULT 'kartu'"); // 'kartu' | 'reminder'
+tambahKolomJikaBelumAda('bacaan', 'ayat_dari', 'INTEGER');
+tambahKolomJikaBelumAda('bacaan', 'ayat_sampai', 'INTEGER');
 
 // ========== BACAAN ==========
 
@@ -185,6 +187,20 @@ function cariBacaanBySuratLike(suratKeyword) {
   return db
     .prepare('SELECT * FROM bacaan WHERE surat_ayat LIKE ? ORDER BY id ASC LIMIT 1')
     .get(`%${suratKeyword}%`);
+}
+
+// Cari row bacaan yang MENGANDUNG ayat tertentu dalam suatu surat (buat lapor-by-ayat).
+// Butuh kolom ayat_dari/ayat_sampai terisi -- row yang belum diisi (NULL) tidak akan match.
+function cariBacaanBySuratDanAyat(suratKeyword, nomorAyat) {
+  return db
+    .prepare(`
+      SELECT * FROM bacaan
+      WHERE surat_ayat LIKE ?
+        AND ayat_dari IS NOT NULL AND ayat_sampai IS NOT NULL
+        AND ? BETWEEN ayat_dari AND ayat_sampai
+      ORDER BY id ASC LIMIT 1
+    `)
+    .get(`%${suratKeyword}%`, nomorAyat);
 }
 
 // ========== USERS ==========
@@ -782,6 +798,7 @@ module.exports = {
   countBacaan,
   getBacaanById,
   cariBacaanBySuratLike,
+  cariBacaanBySuratDanAyat,
 
   // users - existing
   getOrCreateUser,
