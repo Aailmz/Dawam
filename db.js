@@ -153,6 +153,12 @@ tambahKolomJikaBelumAda('users', 'tanggal_terakhir_alkahfi', 'TEXT');
 // is_registered tetap artinya "pernah onboarding", is_active artinya "lagi nerima layanan sekarang".
 tambahKolomJikaBelumAda('users', 'is_active', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'waktu_berhenti_terakhir', 'TEXT');
+// Toggle
+tambahKolomJikaBelumAda('users', 'reminder_sholat_aktif', 'INTEGER DEFAULT 1');
+tambahKolomJikaBelumAda('users', 'tawaran_tilawah_aktif', 'INTEGER DEFAULT 1');
+tambahKolomJikaBelumAda('users', 'tawaran_alkahfi_aktif', 'INTEGER DEFAULT 1');
+tambahKolomJikaBelumAda('users', 'reminder_jumat_laki_aktif', 'INTEGER DEFAULT 1');
+tambahKolomJikaBelumAda('users', 'bentuk_bacaan', "TEXT DEFAULT 'kartu'"); // 'kartu' | 'reminder'
 
 // ========== BACAAN ==========
 
@@ -370,13 +376,19 @@ function isOnboardingLengkap(jid) {
 
 function updateUserFields(jid, data) {
   getOrCreateUser(jid);
-  const kolomValid = ['name', 'location', 'gender', 'target_juz_per_hari', 'motivasi_personal', 'mulai_surat'];
+  const kolomValid = [
+    'name', 'location', 'gender', 'target_juz_per_hari', 'motivasi_personal', 'mulai_surat',
+    'reminder_sholat_aktif', 'tawaran_tilawah_aktif', 'tawaran_alkahfi_aktif',
+    'reminder_jumat_laki_aktif', 'bentuk_bacaan',
+  ];
   const entries = Object.entries(data || {}).filter(([k, v]) => {
     if (!kolomValid.includes(k) || v === null || v === undefined || v === '') return false;
-    // Guardrail keras: target_juz_per_hari HARUS salah satu dari OPSI_TARGET_VALID,
-    // kalau nyasar nilai lain (AI salah tangkep), DIBUANG di sini, bukan disimpan apa adanya.
     if (k === 'target_juz_per_hari' && !isTargetValid(v)) {
-      console.log(`⚠️  target_juz_per_hari="${v}" tidak valid (bukan salah satu dari ${OPSI_TARGET_VALID.join('/')}), diabaikan.`);
+      console.log(`⚠️  target_juz_per_hari="${v}" tidak valid, diabaikan.`);
+      return false;
+    }
+    if (k === 'bentuk_bacaan' && !['kartu', 'reminder'].includes(v)) {
+      console.log(`⚠️  bentuk_bacaan="${v}" tidak valid, diabaikan.`);
       return false;
     }
     return true;

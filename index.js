@@ -846,6 +846,25 @@ function buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, target, selisih
 
 async function kirimBacaanLanjutanUntukAgent(jid) {
   const user = getUser(jid);
+
+  // Mode reminder-saja: TIDAK kirim gambar, TIDAK auto-advance posisi.
+  if (user.bentuk_bacaan === 'reminder') {
+    const teks = `Waktunya tilawah, ${user.name || 'Sahabat'} 📖 Yuk lanjut baca dari mushaf/app kamu sendiri ya, Dawam cuma ngingetin aja.`;
+    try {
+      await sock.sendMessage(jid, { text: teks });
+    } catch (err) {
+      console.error('❌ Gagal kirim reminder bacaan:', err.message);
+      return { sukses: false, pesan: 'Gagal mengirim reminder.' };
+    }
+    resetNoResponse(jid);
+    console.log(`✅ [Agent] Reminder-saja terkirim ke ${jid} (mode bentuk_bacaan='reminder').`);
+    return {
+      sukses: true,
+      mode: 'reminder_saja',
+      catatan_untuk_ai: 'User sedang mode reminder-saja (tanpa kartu gambar), jadi posisi TIDAK otomatis bertambah. Kalau user lapor progress manual, cukup tanggapi natural tanpa tool set_posisi_bacaan.',
+    };
+  }
+  
   const idSebelumWrap = user.last_sent_bacaan_id + 1;
   let nextId = idSebelumWrap;
   if (nextId > 900) nextId = 1;
@@ -1087,6 +1106,12 @@ async function kirimReminderSholat(waktuSholat, jid) {
   }
 
   getOrCreateUser(jid);
+  const user = getUser(jid);
+  if (user.reminder_sholat_aktif === 0) {
+    console.log(`(Reminder sholat nonaktif untuk ${jid}, dilewati.)`);
+    return;
+  }
+
   const nama = getUserName(jid) || 'Sahabat Dawam';
 
   let pesan = await groqAI.generateReminderSholat(waktuSholat, nama);
@@ -1098,6 +1123,11 @@ async function kirimReminderSholat(waktuSholat, jid) {
   await sock.sendMessage(jid, { text: pesan });
   simpanChatHistory(jid, 'assistant', pesan);
   console.log(`✅ Reminder ${waktuSholat} terkirim ke ${jid}`);
+
+  if (user.tawaran_tilawah_aktif === 0) {
+    console.log(`(Tawaran tilawah nonaktif untuk ${jid}, dilewati.)`);
+    return;
+  }
 
   console.log(`⏳ Menjadwalkan tawaran ngaji dalam ${JEDA_TAWARAN_MS / 1000} detik...`);
   setTimeout(() => kirimTawaranNgaji(jid), JEDA_TAWARAN_MS);
@@ -1158,7 +1188,9 @@ function setupReminderJumatLakiScheduler() {
 
   cron.schedule(cronExpr, async () => {
     console.log('\n🕌 Mengirim reminder Jumat (laki-laki)...');
-    const targets = getAllUsers().filter((u) => u.is_registered === 1 && u.is_active === 1 && u.gender === 'L');
+    const targets = getAllUsers().filter(
+      (u) => u.is_registered === 1 && u.is_active === 1 && u.gender === 'L' && u.reminder_jumat_laki_aktif !== 0
+    ); // <-- tambahan filter reminder_jumat_laki_aktif
     if (targets.length === 0) {
       console.log('⚠️  Tidak ada user laki-laki teraktivasi, reminder Jumat dilewati.');
       return;
@@ -1600,6 +1632,8 @@ function setupAlkahfiJumatScheduler() {
       return;
     }
     for (const jid of targets) {
+      const user = getUser(jid);
+      if (user.tawaran_alkahfi_aktif === 0) continue; // <-- tambahan
       await kirimTawaranAlkahfi(jid);
     }
   });

@@ -80,6 +80,36 @@ const TOOLS_PERSONAL = [
   {
     type: 'function',
     function: {
+      name: 'atur_fitur_dawam',
+      description: 'Nyalakan/matikan salah satu fitur personal Dawam sesuai request user, ATAU ganti bentuk kartu bacaan jadi reminder-saja (tanpa gambar). Isi HANYA field yang user minta ubah, biarkan field lain undefined.',
+      parameters: {
+        type: 'object',
+        properties: {
+          reminder_sholat_aktif: { type: 'boolean', description: 'Reminder sholat 5 waktu. false = dimatikan total.' },
+          tawaran_tilawah_aktif: { type: 'boolean', description: 'Tawaran tilawah 10 menit setelah reminder sholat. false = tidak ditawarin tilawah sama sekali (reminder sholat tetap jalan kalau itu juga aktif).' },
+          tawaran_alkahfi_aktif: { type: 'boolean', description: 'Tawaran baca Al-Kahfi tiap Jumat pagi.' },
+          reminder_jumat_laki_aktif: { type: 'boolean', description: 'Reminder sholat Jumat khusus laki-laki (15 menit sebelum Dzuhur). Hanya relevan untuk user gender L.' },
+          bentuk_bacaan: {
+            type: 'string',
+            enum: ['kartu', 'reminder'],
+            description: '"kartu" = kirim gambar bacaan seperti biasa (default). "reminder" = JANGAN kirim gambar sama sekali, cukup kirim pesan teks pengingat buat baca dari mushaf sendiri, posisi tidak otomatis bertambah.',
+          },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_pengaturan_user',
+      description: 'Ambil status on/off semua fitur personal Dawam untuk user ini (reminder sholat, tawaran tilawah, tawaran Al-Kahfi, reminder Jumat laki-laki, bentuk bacaan kartu/reminder). WAJIB panggil ini kalau user tanya "fitur apa aja yang aktif/nonaktif", "pengaturanku gimana", atau sejenisnya -- JANGAN mengarang statusnya.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'set_posisi_bacaan',
       description: 'HANYA untuk user yang MULAI PERTAMA KALI minta pindah ke surat yang BELUM pernah dia baca sebelumnya di progress khataman utamanya (misal "mulai dari Ar-Rahman aja"). JANGAN PERNAH panggil ini kalau: (1) user minta "lanjut"/"balik lagi" ke surat yang sebelumnya SUDAH dia baca (termasuk balik ke Al-Baqarah setelah mampir ke surat lain) -- itu artinya last_sent_bacaan_id SUDAH berubah karena hal lain dan harus dibenerin manual, BUKAN di-reset lagi; (2) untuk Al-Kahfi dalam bentuk apapun -- Al-Kahfi PUNYA TRACKING SENDIRI (last_sent_alkahfi_id) lewat tool kirim_card_alkahfi_lanjutan, TIDAK ADA tool ini yang boleh dipanggil untuknya. Tool ini mereset start_bacaan_id, jadi salah pakai = progress user hilang.',
       parameters: {
@@ -303,6 +333,38 @@ async function eksekusiUpdatePreferensiUser(args, konteks) {
   return { sukses: true, field_diubah: fieldDiubah, data_baru: args };
 }
 
+async function eksekusiAturFiturDawam(args, konteks) {
+  const fieldDiubah = Object.keys(args).filter((k) => args[k] !== undefined && args[k] !== null);
+  if (fieldDiubah.length === 0) {
+    return { sukses: false, pesan: 'Tidak ada pengaturan yang diubah.' };
+  }
+  const dataUntukDb = { ...args };
+  for (const k of ['reminder_sholat_aktif', 'tawaran_tilawah_aktif', 'tawaran_alkahfi_aktif', 'reminder_jumat_laki_aktif']) {
+    if (typeof dataUntukDb[k] === 'boolean') dataUntukDb[k] = dataUntukDb[k] ? 1 : 0;
+  }
+  db.updateUserFields(konteks.jid, dataUntukDb);
+  return {
+    sukses: true,
+    field_diubah: fieldDiubah,
+    catatan_untuk_ai: 'Pengaturan berhasil diubah. Konfirmasi singkat ke user apa yang baru saja dimatikan/dinyalakan/diubah.',
+  };
+}
+
+async function eksekusiGetPengaturanUser(_, konteks) {
+  const user = db.getUser(konteks.jid);
+  return {
+    sukses: true,
+    reminder_sholat: user.reminder_sholat_aktif !== 0 ? 'aktif' : 'nonaktif',
+    tawaran_tilawah: user.tawaran_tilawah_aktif !== 0 ? 'aktif' : 'nonaktif',
+    tawaran_alkahfi: user.tawaran_alkahfi_aktif !== 0 ? 'aktif' : 'nonaktif',
+    reminder_jumat_laki: user.gender === 'L'
+      ? (user.reminder_jumat_laki_aktif !== 0 ? 'aktif' : 'nonaktif')
+      : 'tidak relevan (bukan laki-laki)',
+    bentuk_bacaan: user.bentuk_bacaan === 'reminder' ? 'reminder saja (tanpa kartu gambar)' : 'kartu (kirim gambar seperti biasa)',
+    catatan_untuk_ai: 'Sampaikan status di atas apa adanya ke user secara ringkas dan natural, format bebas, JANGAN tambahkan field yang tidak ada di data ini.',
+  };
+}
+
 async function eksekusiSetPosisiBacaan({ nama_surat }, konteks) {
   const bacaan = db.cariBacaanBySuratLike(nama_surat);
   if (!bacaan) {
@@ -402,6 +464,8 @@ const EKSEKUTOR_PERSONAL = {
   tanya_bacaan_hari_lain: eksekusiTanyaBacaanHariLain,
   minta_berhenti_dawam: eksekusiMintaBerhentiDawam,
   aktifkan_kembali_dawam: eksekusiAktifkanKembaliDawam,
+  atur_fitur_dawam: eksekusiAturFiturDawam,
+  get_pengaturan_user: eksekusiGetPengaturanUser,
 };
 
 // ========== EKSEKUTOR — GRUP ==========
