@@ -71,7 +71,6 @@ const {
   getLogBacaanHarianRange,
   getAnggotaDiBawahPaceHariIni,
   // Jumat Al-Kahfi
-  getBacaanAlkahfiById,
   updateLastSentAlkahfiId,
   setTanggalTerakhirAlkahfi,
   OPSI_TARGET_VALID,
@@ -822,41 +821,6 @@ async function kirimBacaanArab(jid) {
   updateLastSentBacaanId(jid, nextUrutan);
   setUserState(jid, 'WAITING_CONFIRM_TERJEMAH');
   console.log(`✅ Bacaan Arab terkirim ke ${jid}: ${bacaan.surat_ayat} (kode=${bacaan.kode}, urutan=${nextUrutan})`);
-}
-
-async function kirimBacaanTerjemahSaja(jid) {
-  const user = getUser(jid);
-
-  let nextId = user.last_sent_bacaan_id + 1;
-  if (nextId > 900) {
-    nextId = 1;
-  }
-
-  const bacaan = getBacaanByUrutan(nextId);
-  if (!bacaan) {
-    await sock.sendMessage(jid, { text: 'Maaf, data bacaan belum tersedia saat ini 🙏' });
-    console.log(`⚠️  Bacaan id=${nextId} tidak ditemukan (mode terjemah-saja).`);
-    return;
-  }
-
-  try {
-    await sock.sendMessage(jid, {
-      image: { url: path.join(__dirname, bacaan.path_indo) },
-      caption: PESAN_SETELAH_YA_TERJEMAH_TEMPLATE(bacaan.surat_ayat),
-    });
-  } catch (err) {
-    console.error('❌ Gagal kirim bacaan terjemah-saja:', err.message);
-    return;
-  }
-
-  if (!user.tanggal_mulai_baca) {
-    setTanggalMulaiBaca(jid, new Date().toISOString().slice(0, 10));
-  }
-
-  updateLastSentBacaanId(jid, nextId);
-  console.log(`✅ Terjemah-saja terkirim ke ${jid}: ${bacaan.surat_ayat} (id=${nextId})`);
-
-  await cekKecepatanDanTawarkanLanjut(jid);
 }
 
 async function kirimBacaanTerjemahSaja(jid) {

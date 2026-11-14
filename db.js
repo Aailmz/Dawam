@@ -239,6 +239,43 @@ function cariBacaanBySuratLike(suratKeyword) {
     .get(`%${suratKeyword}%`);
 }
 
+// Cari card yang MENGANDUNG ayat tertentu dari suatu surat -- dipakai lapor_bacaan_by_ayat.
+// Karena satu card bisa mencakup rentang ayat (ayat_mulai..ayat_selesai), dan juga bisa
+// span lintas surat (surat_mulai != surat_selesai), pencarian dicoba dengan urutan prioritas:
+// 1. Surat PERSIS cocok di salah satu ujung (mulai/selesai) DAN ayat ada dalam rentang card itu.
+// 2. Kalau tidak ketemu rentang yang pas (misal ayat disebut user meleset dikit dari rentang
+//    yang terdata), fallback ke card dengan surat cocok yang ayat_mulai-nya PALING DEKAT
+//    (<=) ke ayat yang disebut -- supaya tetap dapat posisi yang masuk akal.
+function cariBacaanBySuratDanAyat(namaSurat, nomorAyat) {
+  const kandidatTepat = db
+    .prepare(`
+      SELECT * FROM bacaan
+      WHERE (
+        (surat_mulai LIKE ? AND ? >= ayat_mulai AND (surat_mulai != surat_selesai OR ? <= ayat_selesai))
+        OR
+        (surat_selesai LIKE ? AND surat_mulai != surat_selesai AND ? <= ayat_selesai)
+      )
+      ORDER BY urutan ASC
+      LIMIT 1
+    `)
+    .get(`%${namaSurat}%`, nomorAyat, nomorAyat, `%${namaSurat}%`, nomorAyat);
+
+  if (kandidatTepat) return kandidatTepat;
+
+  // Fallback: surat cocok, ambil card dengan ayat_mulai terbesar yang masih <= nomorAyat
+  // (artinya posisi user ada di card ini atau beberapa card setelahnya yang belum tercatat).
+  const fallback = db
+    .prepare(`
+      SELECT * FROM bacaan
+      WHERE surat_mulai LIKE ? AND ayat_mulai <= ?
+      ORDER BY ayat_mulai DESC, urutan DESC
+      LIMIT 1
+    `)
+    .get(`%${namaSurat}%`, nomorAyat);
+
+  return fallback || null;
+}
+
 // Jumlah kartu dalam satu juz -- dipakai untuk hitung pace dinamis (juz tidak seragam
 // jumlah kartunya di skema baru, beda dari skema lama yang fixed 30/juz).
 function hitungJumlahKartuDalamJuz(juz) {
@@ -682,11 +719,6 @@ function getAnggotaDiBawahPaceHariIni(groupJid) {
 // Posisi terpisah dari progress khataman utama -- cuma dalam surat Al-Kahfi,
 // dicicil tiap Jumat. Dimulai dari bacaan_id manapun yang path-nya surat_ayat LIKE 'Al-Kahfi%'.
 
-function getBacaanAlkahfiById(id) {
-  const row = db.prepare('SELECT * FROM bacaan WHERE id = ? AND surat_ayat LIKE ?').get(id, 'Al-Kahfi%');
-  return row || null;
-}
-
 function updateLastSentAlkahfiId(jid, newId) {
   getOrCreateUser(jid);
   db.prepare('UPDATE users SET last_sent_alkahfi_id = ? WHERE jid = ?').run(newId, jid);
@@ -846,6 +878,7 @@ module.exports = {
   countBacaan,
   getBacaanByUrutan,
   cariBacaanBySuratLike,
+  cariBacaanBySuratDanAyat,
   getUrutanMin,
   getUrutanMax,
   pathArabDariKode,
@@ -926,7 +959,6 @@ module.exports = {
   catatLaporanBacaanManual,
 
   // Jumat Al-Kahfi
-  getBacaanAlkahfiById,
   updateLastSentAlkahfiId,
   setTanggalTerakhirAlkahfi,
 };
