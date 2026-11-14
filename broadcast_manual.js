@@ -12,11 +12,15 @@ const { getAllGroupsAktif } = require('./db');
 
 const PESAN_PENGUMUMAN_FITUR_BERHENTI =
   `Assalamu'alaikum, Sahabat Dawam semua 🤍\n\n` +
-  `Mau kasih info dulu nih 😅\n\n` +
-  `Dawam masih dalam tahap pengembangan, dan dalam waktu dekat bakal ada beberapa perubahan cukup besar di belakang layar (bukan cuma nambah fitur kecil-kecil lagi).\n\n` +
-  `Karena itu, mohon maaf dari sekarang kalau sewaktu-waktu ada hal yang kerasa aneh, nyangkut, salah hitung, atau tiba-tiba beda dari biasanya ya. Itu bagian dari proses, bukan kamu yang salah pakai 🙏\n\n` +
-  `Kalau nemu yang aneh-aneh, boleh banget langsung cerita ke Dawam di chat pribadi, itu bakal sangat membantu buat perbaikan ke depannya.\n\n` +
-  `Makasih banyak udah sabar nemenin Dawam belajar jadi lebih baik 🤍 Semoga tilawah kita tetap lancar di tengah proses ini. Barakallahu fiikum 🌙`;
+  `Mau kasih info update nih 😊\n\n` +
+  `Mulai sekarang, bacaan di Dawam udah pindah ngikutin pemetaan *Mushaf Madinah* (yang biasa dipakai di mushaf cetak pada umumnya), bukan lagi skema lama.\n\n` +
+  `Beberapa hal yang berubah:\n` +
+  `- Kartu bacaan sekarang dipecah per kartu kecil ikut ayat dan waqaf, bukan per halaman penuh kayak sebelumnya.\n` +
+  `- Jumlah kartu per juz jadi beda-beda (nggak sama rata 30 bagian lagi), soalnya ngikutin panjang-pendeknya ayat di tiap juz.\n` +
+  `- Progress dan hitungan pace (persen target harian) sekarang dihitung ulang berdasarkan skema baru ini.\n\n` +
+  `Progress tilawah kalian TETAP lanjut dari posisi terakhir ya, bukan direset dari awal lagi. Cuma cara hitung & tampilannya aja yang menyesuaikan skema baru.\n\n` +
+  `Karena ini perubahan cukup besar, mohon maaf kalau sewaktu-waktu ada yang kerasa aneh, nyangkut, posisi kelihatan meleset, atau beda dari biasanya 🙏 Kalau nemu hal kayak gitu, tolong banget lapor di grup ini ya, biar bisa langsung dicek dan dibenerin.\n\n` +
+  `Makasih banyak udah sabar nemenin Dawam di proses ini 🤍 Semoga tilawah kita tetap istiqomah. Barakallahu fiikum 🌙`;
 
 // ========== HELPER ==========
 
