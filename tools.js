@@ -394,7 +394,7 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
 }
 async function eksekusiGetProgressUser(_, konteks) {
   const user = db.getUser(konteks.jid);
-  const bacaan = db.getBacaanById(user.last_sent_bacaan_id);
+  const bacaan = db.getBacaanByUrutan(user.last_sent_bacaan_id);
   const sisaProgress = db.hitungSisaProgressUser(konteks.jid);
   return {
     sukses: true,
@@ -408,7 +408,21 @@ async function eksekusiGetProgressUser(_, konteks) {
     mode_saat_ini: user.mode_baca_arab_saja === 1 ? 'arab' : 'terjemah-saja (halangan)',
     status_pace: sisaProgress.status || null,
     selisih_dari_target: sisaProgress.selisih_tampilan || null,
-    catatan_untuk_ai: 'posisi_terakhir/juz_sekarang cuma LOKASI baca (bisa jadi user memang mulai dari situ, bukan berarti progress banyak). Progress SEBENARNYA ada di halaman_ditempuh (jumlah halaman yang sudah dibaca sejak mulai) dan selisih_dari_target (sudah final, pakai apa adanya, JANGAN dihitung ulang).',
+    catatan_untuk_ai: 'posisi_terakhir/juz_sekarang cuma LOKASI baca (bisa jadi user memang mulai dari situ, bukan berarti progress banyak). Progress SEBENARNYA ada di halaman_ditempuh (jumlah kartu yang sudah dibaca sejak mulai) dan selisih_dari_target (sudah final, pakai apa adanya, JANGAN dihitung ulang).',
+  };
+}
+
+async function eksekusiSetPosisiBacaan({ nama_surat }, konteks) {
+  const bacaan = db.cariBacaanBySuratLike(nama_surat);
+  if (!bacaan) {
+    return { sukses: false, pesan: `Surat "${nama_surat}" tidak ditemukan di data bacaan.` };
+  }
+  db.updateLastSentBacaanId(konteks.jid, bacaan.urutan - 1);
+  db.setStartBacaanId(konteks.jid, bacaan.urutan - 1);
+  return {
+    sukses: true,
+    surat_ayat: bacaan.surat_ayat,
+    catatan_untuk_ai: `Posisi bacaan user dipindah ke sekitar ${bacaan.surat_ayat}. Bacaan berikutnya yang dikirim akan mulai dari sini, dan progress/pace dihitung ulang dari titik ini.`,
   };
 }
 
@@ -495,22 +509,6 @@ async function eksekusiGetPengaturanUser(_, konteks) {
     sukses: true,
     teks_pengaturan: baris.join('\n'),
     catatan_untuk_ai: 'Kirim field teks_pengaturan PERSIS APA ADANYA (list yang sudah jadi), boleh tambah 1 kalimat pembuka singkat sebelum list dan tawaran mau ubah apa di akhir, TAPI JANGAN mengubah/menyusun ulang isi list itu sendiri.',
-  };
-}
-
-async function eksekusiSetPosisiBacaan({ nama_surat }, konteks) {
-  const bacaan = db.cariBacaanBySuratLike(nama_surat);
-  if (!bacaan) {
-    return { sukses: false, pesan: `Surat "${nama_surat}" tidak ditemukan di data bacaan.` };
-  }
-  db.updateLastSentBacaanId(konteks.jid, bacaan.id - 1);
-  // Pindah posisi manual = titik berangkat baru -- reset start_bacaan_id juga,
-  // supaya pace/progress dihitung ulang dari sini, bukan ketimpa hitungan lama.
-  db.setStartBacaanId(konteks.jid, bacaan.id - 1);
-  return {
-    sukses: true,
-    surat_ayat: bacaan.surat_ayat,
-    catatan_untuk_ai: `Posisi bacaan user dipindah ke sekitar ${bacaan.surat_ayat}. Bacaan berikutnya yang dikirim akan mulai dari sini, dan progress/pace dihitung ulang dari titik ini.`,
   };
 }
 

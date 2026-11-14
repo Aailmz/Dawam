@@ -7,15 +7,17 @@ const db = new Database(path.join(__dirname, 'dawam.db'));
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS bacaan (
-    id INTEGER PRIMARY KEY,
-    hari_global INTEGER NOT NULL,
-    hari_dalam_juz INTEGER NOT NULL,
+    kode TEXT PRIMARY KEY,
+    urutan INTEGER NOT NULL UNIQUE,
+    halaman INTEGER NOT NULL,
+    bagian TEXT NOT NULL,
     juz INTEGER NOT NULL,
-    waktu_sholat TEXT NOT NULL,
     surat_ayat TEXT NOT NULL,
-    jumlah_kata INTEGER,
-    path_arab TEXT NOT NULL,
-    path_indo TEXT NOT NULL
+    surat_mulai TEXT NOT NULL,
+    ayat_mulai INTEGER NOT NULL,
+    surat_selesai TEXT NOT NULL,
+    ayat_selesai INTEGER NOT NULL,
+    ayat_terpotong INTEGER DEFAULT 0
   )
 `);
 
@@ -120,6 +122,25 @@ if (tabelLamaMasihAda) {
   console.log('✅ Tabel "ayat" (lama, Phase 1) dihapus — digantikan tabel "bacaan".');
 }
 
+// Migrasi: skema 'bacaan' lama (id integer, per waktu sholat) sudah digantikan
+// skema baru berbasis kode kartu mushaf (kode text, per halaman mushaf Madinah).
+const kolomBacaanSaatIni = db.prepare(`PRAGMA table_info(bacaan)`).all().map((k) => k.name);
+if (kolomBacaanSaatIni.includes('id') || kolomBacaanSaatIni.includes('hari_global')) {
+  db.exec(`DROP TABLE bacaan`);
+  console.log('✅ Tabel "bacaan" skema lama (per id/waktu sholat) dihapus — digantikan skema kode kartu baru.');
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS bacaan (
+      kode TEXT PRIMARY KEY,
+      urutan INTEGER NOT NULL UNIQUE,
+      halaman INTEGER NOT NULL,
+      bagian TEXT NOT NULL,
+      juz INTEGER NOT NULL,
+      surat_ayat TEXT NOT NULL,
+      ayat_terpotong INTEGER DEFAULT 0
+    )
+  `);
+}
+
 // Migrasi kolom baru di 'users'. SQLite tidak punya "ADD COLUMN IF NOT EXISTS",
 // jadi cek dulu kolom yang sudah ada sebelum ALTER.
 function tambahKolomJikaBelumAda(namaTabel, namaKolom, definisiKolom) {
@@ -159,17 +180,13 @@ tambahKolomJikaBelumAda('users', 'tawaran_tilawah_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'tawaran_alkahfi_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'reminder_jumat_laki_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'bentuk_bacaan', "TEXT DEFAULT 'kartu'"); // 'kartu' | 'reminder'
-tambahKolomJikaBelumAda('bacaan', 'ayat_dari', 'INTEGER');
-tambahKolomJikaBelumAda('bacaan', 'ayat_sampai', 'INTEGER');
 
 // ========== BACAAN ==========
 
 function insertBacaan(row) {
   const stmt = db.prepare(`
-    INSERT INTO bacaan
-      (id, hari_global, hari_dalam_juz, juz, waktu_sholat, surat_ayat, jumlah_kata, path_arab, path_indo)
-    VALUES
-      (@id, @hari_global, @hari_dalam_juz, @juz, @waktu_sholat, @surat_ayat, @jumlah_kata, @path_arab, @path_indo)
+    INSERT INTO bacaan (kode, urutan, halaman, bagian, juz, surat_ayat, ayat_terpotong)
+    VALUES (@kode, @urutan, @halaman, @bagian, @juz, @surat_ayat, @ayat_terpotong)
   `);
   return stmt.run(row);
 }
@@ -179,28 +196,43 @@ function countBacaan() {
   return row.total;
 }
 
-function getBacaanById(id) {
-  return db.prepare('SELECT * FROM bacaan WHERE id = ?').get(id);
+const TOTAL_KARTU = () => countBacaan(); // dipakai untuk wraparound, dihitung dari data, bukan hardcode
+
+function getBacaanByKode(kode) {
+  return db.prepare('SELECT * FROM bacaan WHERE kode = ?').get(kode);
+}
+
+function getBacaanByUrutan(urutan) {
+  return db.prepare('SELECT * FROM bacaan WHERE urutan = ?').get(urutan);
+}
+
+// Kartu pertama (urutan=1) dan kartu terakhir (urutan=TOTAL_KARTU), dipakai untuk wraparound.
+function getUrutanMin() {
+  return db.prepare('SELECT MIN(urutan) as m FROM bacaan').get().m;
+}
+function getUrutanMax() {
+  return db.prepare('SELECT MAX(urutan) as m FROM bacaan').get().m;
+}
+
+// Path gambar digenerate dari kode -- tidak disimpan di db, karena arab & terjemah
+// cuma beda prefix nama file (kartu-003a.jpg vs terjemahan-003a.jpg).
+function pathArabDariKode(kode) {
+  return `images/kartu-${kode}.jpg`;
+}
+function pathIndoDariKode(kode) {
+  return `images/terjemahan-${kode}.jpg`;
 }
 
 function cariBacaanBySuratLike(suratKeyword) {
   return db
-    .prepare('SELECT * FROM bacaan WHERE surat_ayat LIKE ? ORDER BY id ASC LIMIT 1')
+    .prepare('SELECT * FROM bacaan WHERE surat_ayat LIKE ? ORDER BY urutan ASC LIMIT 1')
     .get(`%${suratKeyword}%`);
 }
 
-// Cari row bacaan yang MENGANDUNG ayat tertentu dalam suatu surat (buat lapor-by-ayat).
-// Butuh kolom ayat_dari/ayat_sampai terisi -- row yang belum diisi (NULL) tidak akan match.
-function cariBacaanBySuratDanAyat(suratKeyword, nomorAyat) {
-  return db
-    .prepare(`
-      SELECT * FROM bacaan
-      WHERE surat_ayat LIKE ?
-        AND ayat_dari IS NOT NULL AND ayat_sampai IS NOT NULL
-        AND ? BETWEEN ayat_dari AND ayat_sampai
-      ORDER BY id ASC LIMIT 1
-    `)
-    .get(`%${suratKeyword}%`, nomorAyat);
+// Jumlah kartu dalam satu juz -- dipakai untuk hitung pace dinamis (juz tidak seragam
+// jumlah kartunya di skema baru, beda dari skema lama yang fixed 30/juz).
+function hitungJumlahKartuDalamJuz(juz) {
+  return db.prepare('SELECT COUNT(*) as total FROM bacaan WHERE juz = ?').get(juz).total;
 }
 
 // ========== USERS ==========
@@ -427,16 +459,22 @@ function hitungHariBerjalanUser(jid) {
   return Math.floor((sekarangTengahMalam - mulaiTengahMalam) / (1000 * 60 * 60 * 24)) + 1;
 }
 
-const TOTAL_HALAMAN_KESELURUHAN = 900; // sesuai batas nextId di index.js (900 halaman ~ 30 juz)
-const HALAMAN_PER_JUZ = TOTAL_HALAMAN_KESELURUHAN / 30; // rata 30 halaman/juz
+function totalKartuKeseluruhan() {
+  return countBacaan(); // sekitar 1.808, dihitung dari data riil, bukan hardcode
+}
+// Rata-rata kartu/juz dipakai HANYA sebagai estimasi target harian (lihat catatan
+// di hitungSisaProgressUser) -- jumlah kartu per juz di skema baru TIDAK seragam.
+function rataKartuPerJuz() {
+  return totalKartuKeseluruhan() / 30;
+}
 
 // Ubah selisih halaman jadi deskripsi yang enak dibaca: halaman kalau kecil (<1 juz),
 // juz (bulat, tanpa desimal) kalau besar. Dipakai di sisi "display", basis hitung tetap halaman.
 function formatSelisihUntukTampilan(selisihHalamanAbs) {
-  if (selisihHalamanAbs < HALAMAN_PER_JUZ) {
+  if (selisihHalamanAbs < rataKartuPerJuz()) {
     return { satuan: 'halaman', nilai: Math.round(selisihHalamanAbs) };
   }
-  const juz = Math.round(selisihHalamanAbs / HALAMAN_PER_JUZ);
+  const juz = Math.round(selisihHalamanAbs / rataKartuPerJuz());
   return { satuan: 'juz', nilai: juz };
 }
 
@@ -449,7 +487,7 @@ function hitungHalamanDitempuhDenganWrap(startBacaanId, posisiSekarangId) {
   if (posisiSekarangId >= startBacaanId) {
     return posisiSekarangId - startBacaanId;
   }
-  return (TOTAL_HALAMAN_KESELURUHAN - startBacaanId) + posisiSekarangId;
+  return (totalKartuKeseluruhan() - startBacaanId) + posisiSekarangId;
 }
 
 // Cek apakah user sudah khatam (muter penuh kembali ke/lewat titik start-nya sendiri).
@@ -481,7 +519,7 @@ function hitungSisaProgressUser(jid) {
       juz_sekarang: juzSekarang,
       halaman_posisi_sekarang: posisiSekarang,
       halaman_ditempuh: halamanDitempuh,
-      total_halaman_keseluruhan: TOTAL_HALAMAN_KESELURUHAN,
+      total_halaman_keseluruhan: totalKartuKeseluruhan(),
       sudah_baca_hari_ini: user.tanggal_terakhir_baca === hariIniISOAwal,
       // null = memang tidak relevan dihitung (belum ada target/belum mulai), BUKAN 0%.
       // Konsumen (rekap) WAJIB tampilkan field ini -- null ditampilkan sebagai "-" bukan di-skip.
@@ -492,10 +530,10 @@ function hitungSisaProgressUser(jid) {
   const hariBerjalan = hitungHariBerjalanUser(jid);
 
   let halamanPerHari;
-  if (user.target_juz_per_hari === '12') halamanPerHari = HALAMAN_PER_JUZ / 12;
-  else if (user.target_juz_per_hari === '6') halamanPerHari = HALAMAN_PER_JUZ / 6;
-  else if (user.target_juz_per_hari === '3') halamanPerHari = HALAMAN_PER_JUZ / 3;
-  else if (user.target_juz_per_hari === '1') halamanPerHari = HALAMAN_PER_JUZ / 1;
+  if (user.target_juz_per_hari === '12') halamanPerHari = rataKartuPerJuz() / 12;
+  else if (user.target_juz_per_hari === '6') halamanPerHari = rataKartuPerJuz() / 6;
+  else if (user.target_juz_per_hari === '3') halamanPerHari = rataKartuPerJuz() / 3;
+  else if (user.target_juz_per_hari === '1') halamanPerHari = rataKartuPerJuz() / 1;
   else {
     return {
       ada_target: false,
@@ -503,7 +541,7 @@ function hitungSisaProgressUser(jid) {
       juz_sekarang: juzSekarang,
       halaman_posisi_sekarang: posisiSekarang,
       halaman_ditempuh: halamanDitempuh,
-      total_halaman_keseluruhan: TOTAL_HALAMAN_KESELURUHAN,
+      total_halaman_keseluruhan: totalKartuKeseluruhan(),
     };
   }
 
@@ -541,7 +579,7 @@ function hitungSisaProgressUser(jid) {
     hari_berjalan: hariBerjalan,
     halaman_target_hari_ini: halamanTarget,
     halaman_ditempuh_hari_ini: halamanDitempuhHariIni, // <-- tambahan
-    total_halaman_keseluruhan: TOTAL_HALAMAN_KESELURUHAN,
+    total_halaman_keseluruhan: totalKartuKeseluruhan(),
     status,
     selisih_halaman: selisihHalaman,
     selisih_tampilan: `${status === 'SUDAH_CAPAI_PACE' ? 'lebih' : 'kurang'} ${tampilan.nilai} ${tampilan.satuan}`,

@@ -20,7 +20,11 @@ const {
   setUserLocation,
   getUserName,
   // phase 2
-  getBacaanById,
+  getBacaanByUrutan,
+  getUrutanMin,
+  getUrutanMax,
+  pathArabDariKode,
+  pathIndoDariKode,
   cariBacaanBySuratLike,
   setUserGender,
   setUserTarget,
@@ -748,27 +752,29 @@ async function kirimBacaanArab(jid) {
     return kirimBacaanTerjemahSaja(jid);
   }
 
-  const idSebelumWrap = user.last_sent_bacaan_id + 1;
-  let nextId = idSebelumWrap;
-  if (nextId > 900) {
-    nextId = 1;
+  const urutanMin = getUrutanMin();
+  const urutanMax = getUrutanMax();
+  const urutanSebelumWrap = (user.last_sent_bacaan_id || 0) + 1;
+  let nextUrutan = urutanSebelumWrap;
+  if (nextUrutan > urutanMax) {
+    nextUrutan = urutanMin;
   }
 
   const startBacaanId = user.start_bacaan_id || 0;
-  if (sudahKhatamSetelahWrap(startBacaanId, idSebelumWrap, nextId)) {
-    setStartBacaanId(jid, nextId - 1 < 0 ? 900 : nextId - 1);
+  if (sudahKhatamSetelahWrap(startBacaanId, urutanSebelumWrap, nextUrutan)) {
+    setStartBacaanId(jid, nextUrutan - 1 < urutanMin ? urutanMax : nextUrutan - 1);
   }
 
-  const bacaan = getBacaanById(nextId);
+  const bacaan = getBacaanByUrutan(nextUrutan);
   if (!bacaan) {
     await sock.sendMessage(jid, { text: 'Maaf, data bacaan belum tersedia saat ini 🙏' });
-    console.log(`⚠️  Bacaan id=${nextId} tidak ditemukan di database (seed belum lengkap?).`);
+    console.log(`⚠️  Bacaan urutan=${nextUrutan} tidak ditemukan di database (seed belum lengkap?).`);
     return;
   }
 
   try {
     await sock.sendMessage(jid, {
-      image: { url: path.join(__dirname, bacaan.path_arab) },
+      image: { url: path.join(__dirname, pathArabDariKode(bacaan.kode)) },
       caption: PESAN_SETELAH_YA_ARAB_TEMPLATE(bacaan.surat_ayat),
     });
   } catch (err) {
@@ -780,9 +786,9 @@ async function kirimBacaanArab(jid) {
     setTanggalMulaiBaca(jid, new Date().toISOString().slice(0, 10));
   }
 
-  updateLastSentBacaanId(jid, nextId);
+  updateLastSentBacaanId(jid, nextUrutan);
   setUserState(jid, 'WAITING_CONFIRM_TERJEMAH');
-  console.log(`✅ Bacaan Arab terkirim ke ${jid}: ${bacaan.surat_ayat} (id=${nextId})`);
+  console.log(`✅ Bacaan Arab terkirim ke ${jid}: ${bacaan.surat_ayat} (kode=${bacaan.kode}, urutan=${nextUrutan})`);
 }
 
 async function kirimBacaanTerjemahSaja(jid) {
@@ -820,13 +826,50 @@ async function kirimBacaanTerjemahSaja(jid) {
   await cekKecepatanDanTawarkanLanjut(jid);
 }
 
+async function kirimBacaanTerjemahSaja(jid) {
+  const user = getUser(jid);
+
+  const urutanMin = getUrutanMin();
+  const urutanMax = getUrutanMax();
+  let nextUrutan = (user.last_sent_bacaan_id || 0) + 1;
+  if (nextUrutan > urutanMax) {
+    nextUrutan = urutanMin;
+  }
+
+  const bacaan = getBacaanByUrutan(nextUrutan);
+  if (!bacaan) {
+    await sock.sendMessage(jid, { text: 'Maaf, data bacaan belum tersedia saat ini 🙏' });
+    console.log(`⚠️  Bacaan urutan=${nextUrutan} tidak ditemukan (mode terjemah-saja).`);
+    return;
+  }
+
+  try {
+    await sock.sendMessage(jid, {
+      image: { url: path.join(__dirname, pathIndoDariKode(bacaan.kode)) },
+      caption: PESAN_SETELAH_YA_TERJEMAH_TEMPLATE(bacaan.surat_ayat),
+    });
+  } catch (err) {
+    console.error('❌ Gagal kirim bacaan terjemah-saja:', err.message);
+    return;
+  }
+
+  if (!user.tanggal_mulai_baca) {
+    setTanggalMulaiBaca(jid, new Date().toISOString().slice(0, 10));
+  }
+
+  updateLastSentBacaanId(jid, nextUrutan);
+  console.log(`✅ Terjemah-saja terkirim ke ${jid}: ${bacaan.surat_ayat} (kode=${bacaan.kode}, urutan=${nextUrutan})`);
+
+  await cekKecepatanDanTawarkanLanjut(jid);
+}
+
 // ========== FUNGSI UNTUK AGENT (dipanggil tools.js lewat konteks) ==========
 // Sengaja independen dari kirimBacaanArab/kirimBacaanTerjemahSaja di atas
 // (yang masih dipakai flow state lama) supaya tidak saling pengaruh selama migrasi bertahap.
 // Akan di-cleanup/di-dedup di Step 10 setelah flow lama resmi dibuang.
 
 async function kirimGambarBacaanMentah(jid, bacaan, jenis) {
-  const relPath = jenis === 'arab' ? bacaan.path_arab : bacaan.path_indo;
+  const relPath = jenis === 'arab' ? pathArabDariKode(bacaan.kode) : pathIndoDariKode(bacaan.kode);
   const caption = jenis === 'arab'
     ? PESAN_SETELAH_YA_ARAB_TEMPLATE(bacaan.surat_ayat)
     : PESAN_SETELAH_YA_TERJEMAH_TEMPLATE(bacaan.surat_ayat);
@@ -864,7 +907,6 @@ function buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, target, selisih
 async function kirimBacaanLanjutanUntukAgent(jid) {
   const user = getUser(jid);
 
-  // Mode reminder-saja: TIDAK kirim gambar, TIDAK auto-advance posisi.
   if (user.bentuk_bacaan === 'reminder') {
     const teks = `Waktunya tilawah, ${user.name || 'Sahabat'} 📖 Yuk lanjut baca dari mushaf/app kamu sendiri ya, Dawam cuma ngingetin aja.`;
     try {
@@ -882,13 +924,15 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
     };
   }
 
-  const idSebelumWrap = user.last_sent_bacaan_id + 1;
-  let nextId = idSebelumWrap;
-  if (nextId > 900) nextId = 1;
+  const urutanMin = getUrutanMin();
+  const urutanMax = getUrutanMax();
+  const urutanSebelumWrap = (user.last_sent_bacaan_id || 0) + 1;
+  let nextUrutan = urutanSebelumWrap;
+  if (nextUrutan > urutanMax) nextUrutan = urutanMin;
 
-  const bacaan = getBacaanById(nextId);
+  const bacaan = getBacaanByUrutan(nextUrutan);
   if (!bacaan) {
-    console.log(`⚠️  Bacaan id=${nextId} tidak ditemukan (agent).`);
+    console.log(`⚠️  Bacaan urutan=${nextUrutan} tidak ditemukan (agent).`);
     return { sukses: false, pesan: 'Data bacaan belum tersedia saat ini.' };
   }
 
@@ -899,12 +943,10 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
     return { sukses: false, pesan: 'Gagal mengirim gambar bacaan.' };
   }
 
-  // PENTING: hitung & commit wrap/khatam HANYA setelah gambar benar-benar terkirim,
-  // supaya kalau gagal kirim, start_bacaan_id/posisi tidak kadung berubah (fix bug).
   const startBacaanId = user.start_bacaan_id || 0;
-  const barusanKhatam = sudahKhatamSetelahWrap(startBacaanId, idSebelumWrap, nextId);
+  const barusanKhatam = sudahKhatamSetelahWrap(startBacaanId, urutanSebelumWrap, nextUrutan);
   if (barusanKhatam) {
-    setStartBacaanId(jid, nextId - 1 < 0 ? 900 : nextId - 1);
+    setStartBacaanId(jid, nextUrutan - 1 < urutanMin ? urutanMax : nextUrutan - 1);
   }
 
   const hariIniISO = new Date().toISOString().slice(0, 10);
@@ -912,12 +954,12 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
     setTanggalMulaiBaca(jid, hariIniISO);
   }
   setTanggalTerakhirBaca(jid, hariIniISO);
-  updateLastSentBacaanId(jid, nextId);
+  updateLastSentBacaanId(jid, nextUrutan);
   resetNoResponse(jid);
 
   const { status: statusPace, selisihTampilan } = hitungStatusPaceUntukAgent(jid);
-  catatLogBacaanHarian(jid, hariIniISO, nextId, bacaan.surat_ayat, statusPace);
-  console.log(`✅ [Agent] Bacaan ${jenisDikirim} terkirim ke ${jid}: ${bacaan.surat_ayat} (id=${nextId})`);
+  catatLogBacaanHarian(jid, hariIniISO, nextUrutan, bacaan.surat_ayat, statusPace);
+  console.log(`✅ [Agent] Bacaan ${jenisDikirim} terkirim ke ${jid}: ${bacaan.surat_ayat} (kode=${bacaan.kode}, urutan=${nextUrutan})`);
 
   return {
     sukses: true,
@@ -933,7 +975,7 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
 
 async function kirimTerjemahBacaanUntukAgent(jid) {
   const user = getUser(jid);
-  const bacaan = getBacaanById(user.last_sent_bacaan_id);
+  const bacaan = getBacaanByUrutan(user.last_sent_bacaan_id);
   if (!bacaan) {
     return { sukses: false, pesan: 'Belum ada bacaan Arab yang terkirim sebelumnya untuk diterjemahkan.' };
   }
@@ -958,11 +1000,12 @@ async function kirimTerjemahBacaanUntukAgent(jid) {
 // ---- Lelang Isya (poin 1): kirim card LANJUTAN milik pemilikJid, tapi PERSONAL ke penerimaJid ----
 async function kirimCardLelangPersonal(penerimaJid, pemilikJid) {
   const pemilik = getUser(pemilikJid);
-  const idSebelumWrap = pemilik.last_sent_bacaan_id + 1;
-  let nextId = idSebelumWrap;
-  if (nextId > 900) nextId = 1;
+  const urutanMin = getUrutanMin();
+  const urutanMax = getUrutanMax();
+  let nextUrutan = (pemilik.last_sent_bacaan_id || 0) + 1;
+  if (nextUrutan > urutanMax) nextUrutan = urutanMin;
 
-  const bacaan = getBacaanById(nextId);
+  const bacaan = getBacaanByUrutan(nextUrutan);
   if (!bacaan) {
     return { sukses: false, pesan: 'Data bacaan pemilik card tidak ditemukan.' };
   }
@@ -974,9 +1017,6 @@ async function kirimCardLelangPersonal(penerimaJid, pemilikJid) {
   }
 
   console.log(`✅ [Lelang] Card ${pemilik.name || pemilikJid} (${bacaan.surat_ayat}) dikirim personal ke ${penerimaJid}`);
-  // Sengaja TIDAK update last_sent_bacaan_id milik pemilik atau penerima -- ini cuma
-  // "titip baca" sosial, bukan progress resmi siapa-siapa. Kalau ke depan mau dihitung
-  // sebagai progress salah satu pihak, perlu keputusan eksplisit lagi (punya siapa yang nambah).
   return { sukses: true, surat_ayat: bacaan.surat_ayat };
 }
 
@@ -1594,6 +1634,10 @@ async function kirimTagKeGrup(groupJid, pesanPembuka, jidList) {
 // Tiap Jumat pagi, tawarkan mulai/lanjut cicilan Al-Kahfi -- terpisah dari progress
 // khataman utama. Posisi disimpan di last_sent_alkahfi_id (bukan last_sent_bacaan_id).
 
+function getBacaanAlkahfiByUrutan(urutan) {
+  const row = db.prepare('SELECT * FROM bacaan WHERE urutan = ? AND surat_ayat LIKE ?').get(urutan, 'Al-Kahf%');
+  return row || null;
+}
 async function kirimTawaranAlkahfi(jid) {
   const user = getUser(jid);
   const nama = getUserName(jid) || 'Sahabat Dawam';
@@ -1606,22 +1650,21 @@ async function kirimTawaranAlkahfi(jid) {
 
 async function kirimCardAlkahfiLanjutan(jid) {
   const user = getUser(jid);
-  let nextId = (user.last_sent_alkahfi_id || 0) + 1;
+  let nextUrutan = (user.last_sent_alkahfi_id || 0) + 1;
 
-  let bacaan = getBacaanAlkahfiById(nextId);
+  let bacaan = getBacaanAlkahfiByUrutan(nextUrutan);
   if (!bacaan) {
-    // Habis/belum ada data id berikutnya dalam rentang Al-Kahfi -- coba cari ulang
-    // dari surat_ayat LIKE supaya dapat id AWAL Al-Kahfi (mulai dari awal lagi, anggap khatam cicilan).
-    bacaan = cariBacaanBySuratLike('Al-Kahfi');
+    // Habis/belum ada urutan berikutnya dalam rentang Al-Kahfi -- mulai dari awal lagi.
+    bacaan = cariBacaanBySuratLike('Al-Kahf');
     if (!bacaan) {
       return { sukses: false, pesan: 'Data bacaan Al-Kahfi tidak ditemukan di database.' };
     }
-    nextId = bacaan.id;
+    nextUrutan = bacaan.urutan;
   }
 
   try {
     await sock.sendMessage(jid, {
-      image: { url: path.join(__dirname, bacaan.path_arab) },
+      image: { url: path.join(__dirname, pathArabDariKode(bacaan.kode)) },
       caption: `Lanjutan Al-Kahfi untukmu (${bacaan.surat_ayat}) 🤍`,
     });
   } catch (err) {
@@ -1629,9 +1672,9 @@ async function kirimCardAlkahfiLanjutan(jid) {
     return { sukses: false, pesan: 'Gagal mengirim gambar.' };
   }
 
-  updateLastSentAlkahfiId(jid, nextId);
+  updateLastSentAlkahfiId(jid, nextUrutan);
   setTanggalTerakhirAlkahfi(jid, new Date().toISOString().slice(0, 10));
-  console.log(`✅ Card Al-Kahfi terkirim ke ${jid}: ${bacaan.surat_ayat} (id=${nextId})`);
+  console.log(`✅ Card Al-Kahfi terkirim ke ${jid}: ${bacaan.surat_ayat} (kode=${bacaan.kode}, urutan=${nextUrutan})`);
   return { sukses: true, surat_ayat: bacaan.surat_ayat };
 }
 
