@@ -309,6 +309,8 @@ async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
     return { sukses: false, pesan: 'User ini mode kartu, progress sudah otomatis tercatat, tidak perlu lapor manual.' };
   }
 
+  const gapHari = hitungGapHariTanpaLapor(konteks.jid);
+
   if (typeof jumlah_halaman !== 'number' || jumlah_halaman <= 0 || jumlah_halaman > 60) {
     const sisa = db.hitungSisaProgressUser(konteks.jid);
     return {
@@ -349,7 +351,10 @@ async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
     halaman_target_hari_ini: sisa.halaman_target_hari_ini,
     status_pace: sisa.status,
     selisih_dari_target: sisa.selisih_tampilan,
-    catatan_untuk_ai: 'Laporan berhasil dicatat. Apresiasi singkat, sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).',
+    gap_hari_tanpa_lapor: gapHari,
+    catatan_untuk_ai: gapHari !== null && gapHari >= 2
+      ? `Laporan berhasil dicatat. PENTING: user baru lapor lagi setelah ${gapHari} hari tidak ada laporan sama sekali. Sebelum/sesudah apresiasi progress hari ini, tanyakan dengan natural dan tanpa menghakimi apakah beberapa hari kemarin sempat baca juga (dari app/mushaf lain) tapi belum sempat lapor, atau memang belum sempat tilawah -- biar progressnya tetap akurat.`
+      : 'Laporan berhasil dicatat. Apresiasi singkat, sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).',
   };
 }
 
@@ -360,12 +365,36 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
     return { sukses: false, pesan: 'User ini mode kartu, progress sudah otomatis tercatat, tidak perlu lapor manual.' };
   }
 
+  const gapHari = hitungGapHariTanpaLapor(konteks.jid);
+
+  // Posisi SEBELUM lapor ini -- dipakai buat validasi arah & kasih konteks "dari...ke..." ke AI.
+  const posisiSebelumnya = db.getBacaanByUrutan(user.last_sent_bacaan_id);
+
   const bacaanDitemukan = db.cariBacaanBySuratDanAyat(nama_surat, nomor_ayat);
   if (!bacaanDitemukan) {
     return {
       sukses: false,
       pesan: `Tidak ditemukan card yang mengandung "${nama_surat}" ayat ${nomor_ayat}.`,
       catatan_untuk_ai: `Data belum tersedia untuk ayat spesifik ini (kemungkinan data belum lengkap di sistem). Minta maaf dengan lembut, tawarkan dia lapor pakai perkiraan jumlah halaman saja (tool lapor_bacaan_manual) sebagai alternatif.`,
+    };
+  }
+
+  // Deteksi lompatan ganjil: mundur jauh ATAU maju TERLALU jauh (>30 urutan/card ~ 1 juz lebih)
+  // dalam satu laporan -- kemungkinan salah sebut ayat/surat. JANGAN langsung overwrite,
+  // kasih kesempatan AI konfirmasi dulu ke user.
+  const selisihUrutan = bacaanDitemukan.urutan - (posisiSebelumnya?.urutan || 0);
+  const mundurSignifikan = selisihUrutan < -3; // toleransi kecil, bisa aja emang mau ulang ayat dikit
+  const majuTerlaluJauh = selisihUrutan > 30;
+
+  if ((mundurSignifikan || majuTerlaluJauh) && posisiSebelumnya) {
+    return {
+      sukses: false,
+      butuh_konfirmasi: true,
+      posisi_sebelumnya: posisiSebelumnya.surat_ayat,
+      posisi_yang_dilaporkan: bacaanDitemukan.surat_ayat,
+      catatan_untuk_ai: mundurSignifikan
+        ? `User sebelumnya di posisi "${posisiSebelumnya.surat_ayat}", tapi laporan baru ini (${bacaanDitemukan.surat_ayat}) keliatan MUNDUR jauh dari situ. JANGAN langsung catat. Tanya balik ke user dengan natural untuk konfirmasi -- apakah dia emang mau ulang baca dari situ, atau salah sebut ayat/surat.`
+        : `User sebelumnya di posisi "${posisiSebelumnya.surat_ayat}", tapi laporan baru ini (${bacaanDitemukan.surat_ayat}) keliatan LONCAT TERLALU JAUH (lebih dari sekitar 1 juz dalam sekali lapor). JANGAN langsung catat. Tanya balik ke user dengan natural untuk konfirmasi, kali aja salah sebut nomor ayat atau emang udah baca banyak sekaligus.`,
     };
   }
 
@@ -382,15 +411,34 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
   db.catatLogBacaanHarian(konteks.jid, hariIniISO, bacaanDitemukan.id, bacaanDitemukan.surat_ayat, null);
 
   const sisa = db.hitungSisaProgressUser(konteks.jid);
-  return {
+    return {
     sukses: true,
+    posisi_sebelumnya: posisiSebelumnya?.surat_ayat || null,
     posisi_baru: bacaanDitemukan.surat_ayat,
     halaman_ditempuh_hari_ini: sisa.halaman_ditempuh_hari_ini,
     halaman_target_hari_ini: sisa.halaman_target_hari_ini,
     status_pace: sisa.status,
     selisih_dari_target: sisa.selisih_tampilan,
-    catatan_untuk_ai: `Posisi berhasil disinkronkan ke ${bacaanDitemukan.surat_ayat}. Apresiasi singkat, sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).`,
+    gap_hari_tanpa_lapor: gapHari,
+    catatan_untuk_ai: gapHari !== null && gapHari >= 2
+      ? `Posisi berhasil disinkronkan dari "${posisiSebelumnya?.surat_ayat || 'belum ada posisi sebelumnya'}" ke "${bacaanDitemukan.surat_ayat}". PENTING: user baru lapor lagi setelah ${gapHari} hari tidak ada laporan. Tanyakan natural tanpa menghakimi apakah beberapa hari kemarin sempat baca juga tapi belum lapor. Sebutkan juga progress konkret (dari...ke...) dan status terhadap target hari ini apa adanya.`
+      : `Posisi berhasil disinkronkan dari "${posisiSebelumnya?.surat_ayat || 'belum ada posisi sebelumnya'}" ke "${bacaanDitemukan.surat_ayat}". Sebutkan progress ini dengan konkret (dari...ke..., atau sekian ayat/halaman), apresiasi singkat, dan sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).`,
   };
+}
+
+// Cek apakah ada gap > 1 hari sejak terakhir kali user tercatat baca -- dipakai buat
+// kasih AI konteks supaya nyapa natural ("beberapa hari ini gimana?") alih-alih diam.
+function hitungGapHariTanpaLapor(jid) {
+  const user = db.getUser(jid);
+  if (!user.tanggal_terakhir_baca) return null;
+
+  const terakhir = new Date(user.tanggal_terakhir_baca);
+  const hariIni = new Date();
+  const terakhirTengahMalam = new Date(terakhir.getFullYear(), terakhir.getMonth(), terakhir.getDate());
+  const hariIniTengahMalam = new Date(hariIni.getFullYear(), hariIni.getMonth(), hariIni.getDate());
+
+  const selisihHari = Math.floor((hariIniTengahMalam - terakhirTengahMalam) / (1000 * 60 * 60 * 24));
+  return selisihHari; // 0 = hari ini juga udah lapor, 1 = kemarin terakhir, dst.
 }
 async function eksekusiGetProgressUser(_, konteks) {
   const user = db.getUser(konteks.jid);
