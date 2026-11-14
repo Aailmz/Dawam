@@ -662,7 +662,6 @@ async function handleJawabanTawaranNgaji(jid, text) {
   if (intent === 'YA') {
     const responYa = await groqAI.generateResponYa(nama);
     if (responYa) await sock.sendMessage(jid, { text: responYa });
-
     resetNoResponse(jid);
     await tunggu(1500);
     await kirimBacaanArab(jid);
@@ -672,12 +671,46 @@ async function handleJawabanTawaranNgaji(jid, text) {
     if (!pesan) pesan = PESAN_SETELAH_TIDAK;
     await sock.sendMessage(jid, { text: pesan });
     setUserState(jid, 'IDLE');
-
     await cekDanKirimPesan3xJikaPerlu(jid);
   } else {
-    let pesan = await groqAI.generateFallbackChat(nama, text);
-    if (!pesan) pesan = PESAN_TIDAK_DIMENGERTI;
-    await sock.sendMessage(jid, { text: pesan });
+    // TIDAK_JELAS: bukan jawaban ya/nanti. Lepas state WAITING_CONFIRM,
+    // lempar ke agent supaya pesan user (misal tanya progress) beneran dijawab
+    // pakai tool, bukan cuma fallback chat generik.
+    setUserState(jid, 'IDLE');
+
+    simpanChatHistory(jid, 'user', text);
+    const user = getUser(jid);
+    const konteks = {
+      jid,
+      kirimBacaanLanjutan: () => kirimBacaanLanjutanUntukAgent(jid),
+      kirimTerjemahBacaan: () => kirimTerjemahBacaanUntukAgent(jid),
+      kirimKeGrup: async (targetGroupJid, teksKirim) => {
+        try {
+          await sock.sendMessage(targetGroupJid, { text: teksKirim });
+          return true;
+        } catch (err) {
+          console.error('❌ Gagal kirim ke grup (broadcast):', err.message);
+          return false;
+        }
+      },
+    };
+
+    const hasil = await jalankanAgentDawam({
+      systemPrompt: buatPromptPersonal(user),
+      tools: TOOLS_PERSONAL,
+      historiChat: getChatHistory(jid, 12),
+      pesanBaru: text,
+      eksekutorTools: EKSEKUTOR_PERSONAL,
+      konteks,
+    });
+
+    if (hasil.error || !hasil.jawabanFinal) {
+      await sock.sendMessage(jid, { text: PESAN_TIDAK_DIMENGERTI });
+      return;
+    }
+
+    await sock.sendMessage(jid, { text: hasil.jawabanFinal });
+    simpanChatHistory(jid, 'assistant', hasil.jawabanFinal);
   }
 }
 
