@@ -857,6 +857,8 @@ async function kirimBacaanTerjemahSaja(jid) {
   }
 
   updateLastSentBacaanId(jid, nextUrutan);
+  setTanggalTerakhirBaca(jid, new Date().toISOString().slice(0, 10));
+  catatLogBacaanHarian(jid, new Date().toISOString().slice(0, 10), nextUrutan, bacaan.surat_ayat, null);
   console.log(`✅ Terjemah-saja terkirim ke ${jid}: ${bacaan.surat_ayat} (kode=${bacaan.kode}, urutan=${nextUrutan})`);
 
   await cekKecepatanDanTawarkanLanjut(jid);
