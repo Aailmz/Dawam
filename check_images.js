@@ -4,7 +4,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { countBacaan, getBacaanById } = require('./db');
+const { countBacaan, getBacaanByUrutan } = require('./db');
 
 const imagesDir = path.join(__dirname, 'images');
 

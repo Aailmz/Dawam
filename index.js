@@ -689,7 +689,7 @@ async function handleJawabanTawaranTerjemah(jid, text) {
 
   if (intent === 'YA') {
     const user = getUser(jid);
-    const bacaan = getBacaanById(user.last_sent_bacaan_id);
+    const bacaan = getBacaanByUrutan(user.last_sent_bacaan_id);
     if (bacaan) {
       try {
         await sock.sendMessage(jid, {
@@ -799,7 +799,7 @@ async function kirimBacaanTerjemahSaja(jid) {
     nextId = 1;
   }
 
-  const bacaan = getBacaanById(nextId);
+  const bacaan = getBacaanByUrutan(nextId);
   if (!bacaan) {
     await sock.sendMessage(jid, { text: 'Maaf, data bacaan belum tersedia saat ini 🙏' });
     console.log(`⚠️  Bacaan id=${nextId} tidak ditemukan (mode terjemah-saja).`);

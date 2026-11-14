@@ -505,7 +505,7 @@ function sudahKhatamSetelahWrap(startBacaanId, idSebelumWrap, idSetelahWrap) {
 // Al-Fatihah) -- posisi tinggi tidak berarti progress besar kalau start-nya juga tinggi.
 function hitungSisaProgressUser(jid) {
   const user = getUser(jid);
-  const bacaan = getBacaanById(user.last_sent_bacaan_id);
+  const bacaan = getBacaanByUrutan(user.last_sent_bacaan_id);
   const juzSekarang = bacaan?.juz ?? null;
   const posisiSekarang = user.last_sent_bacaan_id || 0;
   const startBacaanId = user.start_bacaan_id || 0;
@@ -780,7 +780,7 @@ function getRekapProgressGroup(groupJid) {
       };
     }
 
-    const bacaan = getBacaanById(user.last_sent_bacaan_id);
+    const bacaan = getBacaanByUrutan(user.last_sent_bacaan_id);
     const sisaProgress = hitungSisaProgressUser(jid);
 
     return {
@@ -834,7 +834,7 @@ module.exports = {
   // bacaan
   insertBacaan,
   countBacaan,
-  getBacaanById,
+  getBacaanByUrutan,
   cariBacaanBySuratLike,
   cariBacaanBySuratDanAyat,
 
