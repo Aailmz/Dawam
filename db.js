@@ -136,6 +136,10 @@ if (kolomBacaanSaatIni.includes('id') || kolomBacaanSaatIni.includes('hari_globa
       bagian TEXT NOT NULL,
       juz INTEGER NOT NULL,
       surat_ayat TEXT NOT NULL,
+      surat_mulai TEXT NOT NULL,
+      ayat_mulai INTEGER NOT NULL,
+      surat_selesai TEXT NOT NULL,
+      ayat_selesai INTEGER NOT NULL,
       ayat_terpotong INTEGER DEFAULT 0
     )
   `);
@@ -185,8 +189,14 @@ tambahKolomJikaBelumAda('users', 'bentuk_bacaan', "TEXT DEFAULT 'kartu'"); // 'k
 
 function insertBacaan(row) {
   const stmt = db.prepare(`
-    INSERT INTO bacaan (kode, urutan, halaman, bagian, juz, surat_ayat, ayat_terpotong)
-    VALUES (@kode, @urutan, @halaman, @bagian, @juz, @surat_ayat, @ayat_terpotong)
+    INSERT INTO bacaan (
+      kode, urutan, halaman, bagian, juz, surat_ayat,
+      surat_mulai, ayat_mulai, surat_selesai, ayat_selesai, ayat_terpotong
+    )
+    VALUES (
+      @kode, @urutan, @halaman, @bagian, @juz, @surat_ayat,
+      @surat_mulai, @ayat_mulai, @surat_selesai, @ayat_selesai, @ayat_terpotong
+    )
   `);
   return stmt.run(row);
 }
