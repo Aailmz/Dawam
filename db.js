@@ -846,6 +846,12 @@ module.exports = {
   countBacaan,
   getBacaanByUrutan,
   cariBacaanBySuratLike,
+  getUrutanMin,
+  getUrutanMax,
+  pathArabDariKode,
+  pathIndoDariKode,
+  getBacaanByKode,
+  hitungJumlahKartuDalamJuz,
 
   // users - existing
   getOrCreateUser,
