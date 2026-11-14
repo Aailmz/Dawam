@@ -819,6 +819,8 @@ async function kirimBacaanArab(jid) {
   }
 
   updateLastSentBacaanId(jid, nextUrutan);
+  setTanggalTerakhirBaca(jid, new Date().toISOString().slice(0, 10));
+  catatLogBacaanHarian(jid, new Date().toISOString().slice(0, 10), nextUrutan, bacaan.surat_ayat, null);
   setUserState(jid, 'WAITING_CONFIRM_TERJEMAH');
   console.log(`✅ Bacaan Arab terkirim ke ${jid}: ${bacaan.surat_ayat} (kode=${bacaan.kode}, urutan=${nextUrutan})`);
 }
