@@ -836,7 +836,6 @@ module.exports = {
   countBacaan,
   getBacaanByUrutan,
   cariBacaanBySuratLike,
-  cariBacaanBySuratDanAyat,
 
   // users - existing
   getOrCreateUser,
