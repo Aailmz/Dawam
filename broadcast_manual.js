@@ -12,16 +12,30 @@ const { getAllGroupsAktif } = require('./db');
 
 const PESAN_PENGUMUMAN_FITUR_BERHENTI =
   `Assalamu'alaikum, Sahabat Dawam semua 🤍\n\n` +
-  `Mau kasih info update nih 😊\n\n` +
-  `Mulai sekarang, bacaan di Dawam udah pindah ngikutin pemetaan *Mushaf Madinah* (yang biasa dipakai di mushaf cetak pada umumnya), bukan lagi skema lama.\n\n` +
-  `Beberapa hal yang berubah:\n` +
-  `- Kartu bacaan sekarang dipecah per kartu kecil ikut ayat dan waqaf, bukan per halaman penuh kayak sebelumnya.\n` +
-  `- Jumlah kartu per juz jadi beda-beda (nggak sama rata 30 bagian lagi), soalnya ngikutin panjang-pendeknya ayat di tiap juz.\n` +
-  `- Progress dan hitungan pace (persen target harian) sekarang dihitung ulang berdasarkan skema baru ini.\n\n` +
-  `Progress tilawah kalian TETAP lanjut dari posisi terakhir ya, bukan direset dari awal lagi. Cuma cara hitung & tampilannya aja yang menyesuaikan skema baru.\n\n` +
-  `Karena ini perubahan cukup besar, mohon maaf kalau sewaktu-waktu ada yang kerasa aneh, nyangkut, posisi kelihatan meleset, atau beda dari biasanya 🙏 Kalau nemu hal kayak gitu, tolong banget lapor di grup ini ya, biar bisa langsung dicek dan dibenerin.\n\n` +
-  `Makasih banyak udah sabar nemenin Dawam di proses ini 🤍 Semoga tilawah kita tetap istiqomah. Barakallahu fiikum 🌙`;
-
+  `Ada fitur baru nih, Dawam sekarang lebih fleksibel, kamu bisa atur sendiri mana yang mau nyala/mati 😊\n\n` +
+  `Jadi kalau ada bagian yang kerasa kurang pas sama kebiasaanmu, sekarang gak perlu dipaksain lagi. Tinggal bilang aja ke Dawam di chat pribadi pakai bahasa biasa, gak ada format khusus kok.\n\n` +
+  `Ini yang bisa kamu atur:\n\n` +
+  `1️⃣ *Reminder sholat 5 waktu*\n` +
+  `Pengingat pas masuk waktu Subuh, Dzuhur, Ashar, Maghrib, Isya.\n` +
+  `Mau matiin? bilang aja: _"gausah reminder sholat ya"_\n\n` +
+  `2️⃣ *Tawaran tilawah*\n` +
+  `Ini yang muncul abis reminder sholat, nanya "udah siap lanjut baca belum". Kalau dimatiin, reminder sholat tetap jalan, cuma gak ditawarin baca lagi.\n` +
+  `Bilang: _"reminder sholat aja, gausah tawarin baca"_\n\n` +
+  `3️⃣ *Bentuk bacaannya: kartu gambar atau reminder teks aja*\n` +
+  `Defaultnya Dawam kirim kartu (gambar ayat Arab/terjemah). Tapi kalau kamu lebih suka baca dari mushaf/app sendiri dan cuma butuh diingetin, bisa diganti jadi reminder teks doang (gak ada gambar, progress gak otomatis kehitung).\n` +
+  `Bilang: _"gausah kartu, reminder aja"_ (balik ke kartu: _"kartu lagi aja"_)\n\n` +
+  `📌 Kalau kamu pilih mode reminder ini, progressnya BUKAN dihitung otomatis lagi ya. Jadi abis baca, tinggal lapor ke Dawam udah sampai mana, misal: _"udah sampai Al-Baqarah ayat 82"_, nanti Dawam yang hitungin progressnya otomatis dari situ.\n\n` +
+  `⚠️ Penting: meskipun bacanya pakai mushaf/app sendiri, urutan bacanya tetap ngikutin panduan/alur Dawam ya (bukan loncat-loncat bebas pilih surat sendiri), supaya progress dan posisi kamu ketemu/sinkron pas dilaporkan. Kalau posisi yang kamu sebut kelihatan aneh/gak masuk akal (misal mundur dari posisi sebelumnya), Dawam bakal tanya ulang dulu biar datanya tetap akurat, bukan main catat aja.\n\n` +
+  `4️⃣ *Tawaran baca Al-Kahfi tiap Jumat pagi*\n` +
+  `Kalau gak butuh pengingat khusus ini, bisa dimatiin.\n` +
+  `Bilang: _"gausah al kahfi"_\n\n` +
+  `5️⃣ *Reminder khusus sholat Jumat* (buat Akhi aja)\n` +
+  `Pengingat 15 menit sebelum Dzuhur, khusus hari Jumat.\n` +
+  `Bilang: _"gausah reminder jumat"_\n\n` +
+  `Semua fitur di atas bisa dinyalain lagi kapan aja kok, tinggal bilang sebaliknya (misal "nyalain lagi reminder sholat").\n\n` +
+  `Mau cek pengaturanmu sekarang gimana? Tinggal tanya aja: _"pengaturanku gimana?"_ nanti Dawam kasih liat semuanya.\n\n` +
+  `Semoga ini bikin Dawam makin nyaman dipakai sesuai ritme ibadah masing-masing ya 🤍 Barakallahu fiikum 🌙`;
+  
 // ========== HELPER ==========
 
 function tunggu(ms) {
