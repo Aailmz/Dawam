@@ -588,8 +588,8 @@ async function handleOnboardingTurn(jid, text) {
         if (surat) {
           const bacaanDitemukan = cariBacaanBySuratLike(surat);
           if (bacaanDitemukan) {
-            updateLastSentBacaanId(jid, bacaanDitemukan.id - 1);
-            setStartBacaanId(jid, bacaanDitemukan.id - 1); // titik berangkat, buat hitung pace dari sini
+            updateLastSentBacaanId(jid, bacaanDitemukan.urutan - 1);
+            setStartBacaanId(jid, bacaanDitemukan.urutan - 1); // titik berangkat, buat hitung pace dari sini
             await sock.sendMessage(jid, {
               text: `Siap, Dawam akan mulai dari sekitar ${bacaanDitemukan.surat_ayat} ya 🤍`,
             });
@@ -892,7 +892,7 @@ function tentukanJumlahKartuPerKirim(targetJuzPerHari) {
 function buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, target, selisihTampilan, suratAyat, namaUser) {
   const sapa = namaUser || 'Sahabat';
 
-  const bagianDasar = `Bacaan "${suratAyat}" sudah terkirim ke ${sapa}. Sebutkan ini di awal balasanmu dengan singkat dan natural (contoh gaya: "${suratAyat} udah terkirim, ${sapa}."), JANGAN pakai kalimat "Barakallahu fiik" atau sejenisnya lagi di sini (itu sudah terkirim terpisah sebelum kartu).`;
+  const bagianDasar = `Bacaan "${suratAyat}" sudah terkirim ke ${sapa}. Sebutkan ini di awal balasanmu dengan singkat dan natural (contoh gaya: "${suratAyat} udah terkirim, ${sapa}."), JANGAN pakai kalimat "Barakallahu fiik" atau sejenisnya lagi di sini (itu sudah terkirim terpisah sebelum kartu). PENTING: field selisihTampilan di bawah ini SUDAH khusus progress HARI INI SAJA (bukan total keseluruhan) -- JANGAN sebutkan angka progress total/keseluruhan apapun di sini, walau kamu tahu dari percakapan sebelumnya, karena itu akan membingungkan dan tidak relevan dengan konteks target harian ini.`;
 
   const bagianMode = modeArabSaja
     ? ' Setelah itu, tawarkan dengan natural apakah mau sekalian dikirim terjemahnya juga (tool kirim_terjemah_bacaan), ATAU langsung lanjut ke kartu berikutnya (tool kirim_bacaan_lanjutan) -- sebut dua opsi ini sebagai pertanyaan singkat di akhir, jangan pisah jadi dua pertanyaan.'
