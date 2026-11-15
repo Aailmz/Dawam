@@ -226,11 +226,21 @@ function getUrutanMax() {
 
 // Path gambar digenerate dari kode -- tidak disimpan di db, karena arab & terjemah
 // cuma beda prefix nama file (kartu-003a.jpg vs terjemahan-003a.jpg).
+function normalisasiKodeUntukFilename(kode) {
+  // File gambar selalu pakai angka 3-digit zero-padded (001, 014, 114, dst),
+  // sementara kolom "kode" di DB disimpan tanpa padding (1, 14, 114). Fungsi ini
+  // menyamakan representasi kode ke format filename yang sebenarnya dipakai di disk.
+  const match = kode.match(/^(\d+)([a-z]*)$/);
+  if (!match) return kode; // format tidak dikenali, pakai apa adanya
+  const [, angka, huruf] = match;
+  return angka.padStart(3, '0') + huruf;
+}
+
 function pathArabDariKode(kode) {
-  return `images/kartu-${kode}.jpg`;
+  return `images/kartu-${normalisasiKodeUntukFilename(kode)}.jpg`;
 }
 function pathIndoDariKode(kode) {
-  return `images/terjemahan-${kode}.jpg`;
+  return `images/terjemahan-${normalisasiKodeUntukFilename(kode)}.jpg`;
 }
 
 function cariBacaanBySuratLike(suratKeyword) {
