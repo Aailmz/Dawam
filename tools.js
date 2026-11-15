@@ -355,11 +355,7 @@ const TOOLS_GRUP = [
 
 async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
   const user = db.getUser(konteks.jid);
-
-  if (user.bentuk_bacaan !== 'reminder') {
-    return { sukses: false, pesan: 'User ini mode kartu, progress sudah otomatis tercatat, tidak perlu lapor manual.' };
-  }
-
+  const modeKartu = user.bentuk_bacaan !== 'reminder';
   const gapHari = hitungGapHariTanpaLapor(konteks.jid);
 
   if (typeof jumlah_halaman !== 'number' || jumlah_halaman <= 0 || jumlah_halaman > 60) {
@@ -395,6 +391,10 @@ async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
   db.resetNoResponse(konteks.jid);
 
   const sisa = db.hitungSisaProgressUser(konteks.jid);
+  const catatanModeKartu = modeKartu
+    ? ' CATATAN TAMBAHAN: user ini masih mode KARTU (bukan reminder), tapi baru saja lapor manual seperti mode reminder. Setelah apresiasi progress, sebutkan dengan santai bahwa dia sebenarnya masih dalam mode kartu (jadi nanti tetap akan dikirimi gambar kartu juga), dan tawarkan (bukan paksa) apakah mau sekalian pindah ke mode reminder teks biar gak dobel sama laporan manualnya -- bilang "kartu gausah dulu"/"reminder aja" kalau mau pindah. Kalau dia tidak merespons soal ini atau menolak, tidak apa-apa, tetap lanjut seperti biasa.'
+    : '';
+
   return {
     sukses: true,
     halaman_dilaporkan: jumlah_halaman,
@@ -403,19 +403,16 @@ async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
     status_pace: sisa.status,
     selisih_dari_target: sisa.selisih_tampilan,
     gap_hari_tanpa_lapor: gapHari,
-    catatan_untuk_ai: gapHari !== null && gapHari >= 2
+    mode_saat_ini: modeKartu ? 'kartu' : 'reminder',
+    catatan_untuk_ai: (gapHari !== null && gapHari >= 2
       ? `Laporan berhasil dicatat. PENTING: user baru lapor lagi setelah ${gapHari} hari tidak ada laporan sama sekali. Sebelum/sesudah apresiasi progress hari ini, tanyakan dengan natural dan tanpa menghakimi apakah beberapa hari kemarin sempat baca juga (dari app/mushaf lain) tapi belum sempat lapor, atau memang belum sempat tilawah -- biar progressnya tetap akurat.`
-      : 'Laporan berhasil dicatat. Apresiasi singkat, sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).',
+      : 'Laporan berhasil dicatat. Apresiasi singkat, sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).') + catatanModeKartu,
   };
 }
 
 async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
   const user = db.getUser(konteks.jid);
-
-  if (user.bentuk_bacaan !== 'reminder') {
-    return { sukses: false, pesan: 'User ini mode kartu, progress sudah otomatis tercatat, tidak perlu lapor manual.' };
-  }
-
+  const modeKartu = user.bentuk_bacaan !== 'reminder';
   const gapHari = hitungGapHariTanpaLapor(konteks.jid);
 
   // Posisi SEBELUM lapor ini -- dipakai buat validasi arah & kasih konteks "dari...ke..." ke AI.
@@ -462,7 +459,11 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
   db.catatLogBacaanHarian(konteks.jid, hariIniISO, bacaanDitemukan.urutan, bacaanDitemukan.surat_ayat, null);
 
   const sisa = db.hitungSisaProgressUser(konteks.jid);
-    return {
+  const catatanModeKartu = modeKartu
+    ? ' CATATAN TAMBAHAN: user ini masih mode KARTU (bukan reminder), tapi baru saja lapor manual by-ayat. Setelah apresiasi progress, sebutkan dengan santai bahwa dia sebenarnya masih dalam mode kartu, dan tawarkan (bukan paksa) apakah mau sekalian pindah ke mode reminder teks biar gak dobel sama laporan manualnya. Kalau tidak direspons/ditolak, tidak apa-apa.'
+    : '';
+
+  return {
     sukses: true,
     posisi_sebelumnya: posisiSebelumnya?.surat_ayat || null,
     posisi_baru: bacaanDitemukan.surat_ayat,
@@ -471,9 +472,10 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
     status_pace: sisa.status,
     selisih_dari_target: sisa.selisih_tampilan,
     gap_hari_tanpa_lapor: gapHari,
-    catatan_untuk_ai: gapHari !== null && gapHari >= 2
+    mode_saat_ini: modeKartu ? 'kartu' : 'reminder',
+    catatan_untuk_ai: (gapHari !== null && gapHari >= 2
       ? `Posisi berhasil disinkronkan dari "${posisiSebelumnya?.surat_ayat || 'belum ada posisi sebelumnya'}" ke "${bacaanDitemukan.surat_ayat}". PENTING: user baru lapor lagi setelah ${gapHari} hari tidak ada laporan. Tanyakan natural tanpa menghakimi apakah beberapa hari kemarin sempat baca juga tapi belum lapor. Sebutkan juga progress konkret (dari...ke...) dan status terhadap target hari ini apa adanya.`
-      : `Posisi berhasil disinkronkan dari "${posisiSebelumnya?.surat_ayat || 'belum ada posisi sebelumnya'}" ke "${bacaanDitemukan.surat_ayat}". Sebutkan progress ini dengan konkret (dari...ke..., atau sekian ayat/halaman), apresiasi singkat, dan sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).`,
+      : `Posisi berhasil disinkronkan dari "${posisiSebelumnya?.surat_ayat || 'belum ada posisi sebelumnya'}" ke "${bacaanDitemukan.surat_ayat}". Sebutkan progress ini dengan konkret (dari...ke..., atau sekian ayat/halaman), apresiasi singkat, dan sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).`) + catatanModeKartu,
   };
 }
 
