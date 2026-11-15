@@ -451,7 +451,7 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
 
   // Set posisi persis ke card yang ketemu (bukan +1 dari posisi lama) -- beda dengan
   // kirim_bacaan_lanjutan yang selalu nambah incremental.
-  db.updateLastSentBacaanId(konteks.jid, bacaanDitemukan.id);
+  db.updateLastSentBacaanId(konteks.jid, bacaanDitemukan.urutan);
 
   const hariIniISO = new Date().toISOString().slice(0, 10);
   db.setTanggalTerakhirBaca(konteks.jid, hariIniISO);
@@ -459,7 +459,7 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
 
   // Catat ke log harian juga supaya konsisten dengan hitungSisaProgressUser (persen_pace
   // hari ini dihitung dari jumlah_kartu di log_bacaan_harian) -- reuse 1 "kartu" per lapor.
-  db.catatLogBacaanHarian(konteks.jid, hariIniISO, bacaanDitemukan.id, bacaanDitemukan.surat_ayat, null);
+  db.catatLogBacaanHarian(konteks.jid, hariIniISO, bacaanDitemukan.urutan, bacaanDitemukan.surat_ayat, null);
 
   const sisa = db.hitungSisaProgressUser(konteks.jid);
     return {
@@ -494,7 +494,7 @@ async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_a
 
   if (jenis_koreksi === 'posisi_sekarang') {
     const posisiSebelumnya = db.getBacaanByUrutan(db.getUser(konteks.jid).last_sent_bacaan_id);
-    db.updateLastSentBacaanId(konteks.jid, bacaanDitemukan.id);
+    db.updateLastSentBacaanId(konteks.jid, bacaanDitemukan.urutan);
 
     return {
       sukses: true,
@@ -514,11 +514,11 @@ async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_a
     tanggal.setDate(tanggal.getDate() - mundur);
     const tanggalISO = tanggal.toISOString().slice(0, 10);
 
-    db.catatLogBacaanHarian(konteks.jid, tanggalISO, bacaanDitemukan.id, bacaanDitemukan.surat_ayat, null);
+    db.catatLogBacaanHarian(konteks.jid, tanggalISO, bacaanDitemukan.urutan, bacaanDitemukan.surat_ayat, null);
 
     // Kalau yang dikoreksi adalah tanggal hari ini, sinkronkan juga posisi utamanya.
     if (mundur === 0) {
-      db.updateLastSentBacaanId(konteks.jid, bacaanDitemukan.id);
+      db.updateLastSentBacaanId(konteks.jid, bacaanDitemukan.urutan);
     }
 
     return {
