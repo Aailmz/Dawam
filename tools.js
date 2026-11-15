@@ -68,6 +68,41 @@ const TOOLS_PERSONAL = [
   {
     type: 'function',
     function: {
+      name: 'koreksi_catatan_bacaan',
+      description: 'Perbaiki catatan bacaan yang SALAH tercatat oleh Dawam, berdasarkan komplain/koreksi eksplisit dari user (misal "itu salah, aku kemarin baca lebih banyak", "posisiku bukan di situ, harusnya..."). WAJIB konfirmasi dulu detail koreksinya ke user sebelum panggil tool ini, dan panggil HANYA setelah user benar-benar mengonfirmasi (bilang "iya"/"benar"/"betul" dsb). JANGAN panggil tool ini untuk laporan bacaan BARU (pakai lapor_bacaan_by_ayat/lapor_bacaan_manual untuk itu) -- ini KHUSUS untuk membetulkan catatan yang SUDAH ada tapi keliru.',
+      parameters: {
+        type: 'object',
+        properties: {
+          jenis_koreksi: {
+            type: 'string',
+            enum: ['posisi_sekarang', 'log_tanggal_tertentu'],
+            description: 'posisi_sekarang: betulkan posisi bacaan terkini user (last_sent_bacaan_id). log_tanggal_tertentu: betulkan catatan di tanggal TERTENTU di masa lalu (termasuk hari ini).',
+          },
+          nama_surat: {
+            type: 'string',
+            description: 'Nama surat yang BENAR menurut user, apa adanya.',
+          },
+          nomor_ayat: {
+            type: 'number',
+            description: 'Nomor ayat yang BENAR menurut user.',
+          },
+          tanggal_relatif: {
+            type: 'string',
+            enum: ['hari_ini', 'kemarin', 'dua_hari_lalu', 'tiga_hari_lalu'],
+            description: 'WAJIB diisi kalau jenis_koreksi=log_tanggal_tertentu. Tanggal mana yang mau dikoreksi.',
+          },
+          alasan_koreksi: {
+            type: 'string',
+            description: 'Ringkasan singkat alasan/komplain user, apa adanya, buat jejak audit.',
+          },
+        },
+        required: ['jenis_koreksi', 'nama_surat', 'nomor_ayat', 'alasan_koreksi'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'kirim_terjemah_bacaan',
       description: 'Kirim gambar terjemah dari bacaan Arab yang BARU SAJA dikirim (posisi yang sama, bukan lanjut ke ayat berikutnya). Panggil HANYA kalau user minta lihat artinya setelah baca Arab.',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -400,7 +435,7 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
   // kasih kesempatan AI konfirmasi dulu ke user.
   const selisihUrutan = bacaanDitemukan.urutan - (posisiSebelumnya?.urutan || 0);
   const mundurSignifikan = selisihUrutan < -3; // toleransi kecil, bisa aja emang mau ulang ayat dikit
-  const majuTerlaluJauh = selisihUrutan > 30;
+  const majuTerlaluJauh = selisihUrutan > 10; // diperketat: loncat >10 kartu kecil dalam sekali lapor dianggap perlu konfirmasi
 
   if ((mundurSignifikan || majuTerlaluJauh) && posisiSebelumnya) {
     return {
@@ -440,6 +475,61 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
       ? `Posisi berhasil disinkronkan dari "${posisiSebelumnya?.surat_ayat || 'belum ada posisi sebelumnya'}" ke "${bacaanDitemukan.surat_ayat}". PENTING: user baru lapor lagi setelah ${gapHari} hari tidak ada laporan. Tanyakan natural tanpa menghakimi apakah beberapa hari kemarin sempat baca juga tapi belum lapor. Sebutkan juga progress konkret (dari...ke...) dan status terhadap target hari ini apa adanya.`
       : `Posisi berhasil disinkronkan dari "${posisiSebelumnya?.surat_ayat || 'belum ada posisi sebelumnya'}" ke "${bacaanDitemukan.surat_ayat}". Sebutkan progress ini dengan konkret (dari...ke..., atau sekian ayat/halaman), apresiasi singkat, dan sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).`,
   };
+}
+
+async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_ayat, tanggal_relatif, alasan_koreksi }, konteks) {
+  const bacaanDitemukan = db.cariBacaanBySuratDanAyat(nama_surat, nomor_ayat);
+  if (!bacaanDitemukan) {
+    return {
+      sukses: false,
+      pesan: `Tidak ditemukan card yang mengandung "${nama_surat}" ayat ${nomor_ayat}.`,
+      catatan_untuk_ai: 'Data tidak ditemukan untuk ayat ini. Minta maaf dengan lembut, tanyakan apakah user yakin dengan nama surat/nomor ayatnya, atau tawarkan sebut rentang lain yang lebih pas.',
+    };
+  }
+
+  // Jejak audit sederhana -- biar kalau ada yang aneh belakangan, bisa ditelusuri siapa
+  // yang minta koreksi apa dan kapan. Reuse tabel group_activity_log walau ini personal,
+  // dengan jenis khusus biar bisa dibedakan nanti.
+  db.catatAktivitasGroup(konteks.jid, konteks.jid, 'KOREKSI_MANUAL', `${jenis_koreksi}: ${alasan_koreksi} -> ${bacaanDitemukan.surat_ayat}`);
+
+  if (jenis_koreksi === 'posisi_sekarang') {
+    const posisiSebelumnya = db.getBacaanByUrutan(db.getUser(konteks.jid).last_sent_bacaan_id);
+    db.updateLastSentBacaanId(konteks.jid, bacaanDitemukan.id);
+
+    return {
+      sukses: true,
+      posisi_lama: posisiSebelumnya?.surat_ayat || null,
+      posisi_baru: bacaanDitemukan.surat_ayat,
+      catatan_untuk_ai: `Posisi bacaan user berhasil dikoreksi dari "${posisiSebelumnya?.surat_ayat || 'belum ada'}" ke "${bacaanDitemukan.surat_ayat}". Konfirmasi ke user dengan hangat bahwa sudah dibetulkan.`,
+    };
+  }
+
+  if (jenis_koreksi === 'log_tanggal_tertentu') {
+    if (!tanggal_relatif) {
+      return { sukses: false, pesan: 'tanggal_relatif wajib diisi untuk koreksi log tanggal tertentu.' };
+    }
+    const mapHari = { hari_ini: 0, kemarin: 1, dua_hari_lalu: 2, tiga_hari_lalu: 3 };
+    const mundur = mapHari[tanggal_relatif] ?? 0;
+    const tanggal = new Date();
+    tanggal.setDate(tanggal.getDate() - mundur);
+    const tanggalISO = tanggal.toISOString().slice(0, 10);
+
+    db.catatLogBacaanHarian(konteks.jid, tanggalISO, bacaanDitemukan.id, bacaanDitemukan.surat_ayat, null);
+
+    // Kalau yang dikoreksi adalah tanggal hari ini, sinkronkan juga posisi utamanya.
+    if (mundur === 0) {
+      db.updateLastSentBacaanId(konteks.jid, bacaanDitemukan.id);
+    }
+
+    return {
+      sukses: true,
+      tanggal_dikoreksi: tanggalISO,
+      posisi_baru: bacaanDitemukan.surat_ayat,
+      catatan_untuk_ai: `Catatan tanggal ${tanggalISO} berhasil dikoreksi jadi "${bacaanDitemukan.surat_ayat}". Konfirmasi ke user dengan hangat bahwa sudah dibetulkan.`,
+    };
+  }
+
+  return { sukses: false, pesan: 'jenis_koreksi tidak dikenali.' };
 }
 
 // Cek apakah ada gap > 1 hari sejak terakhir kali user tercatat baca -- dipakai buat
@@ -679,6 +769,7 @@ const EKSEKUTOR_PERSONAL = {
   get_pengaturan_user: eksekusiGetPengaturanUser,
   lapor_bacaan_manual: eksekusiLaporBacaanManual,
   lapor_bacaan_by_ayat: eksekusiLaporBacaanByAyat,
+  koreksi_catatan_bacaan: eksekusiKoreksiCatatanBacaan,
 };
 
 // ========== EKSEKUTOR — GRUP ==========
