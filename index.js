@@ -893,20 +893,23 @@ function hitungStatusPaceUntukAgent(jid) {
   return { status: sisa.status, selisihTampilan: sisa.selisih_tampilan };
 }
 
-function buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, target, selisihTampilan) {
+function buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, target, selisihTampilan, suratAyat, namaUser) {
+  const sapa = namaUser || 'Sahabat';
+
+  const bagianDasar = `Bacaan "${suratAyat}" sudah terkirim ke ${sapa}. Sebutkan ini di awal balasanmu dengan singkat dan natural (contoh gaya: "${suratAyat} udah terkirim, ${sapa}."), JANGAN pakai kalimat "Barakallahu fiik" atau sejenisnya lagi di sini (itu sudah terkirim terpisah sebelum kartu).`;
+
   const bagianMode = modeArabSaja
-    ? 'Bacaan Arab sudah terkirim. Tawarkan dengan natural apakah user mau lanjut baca terjemahnya juga (pakai tool kirim_terjemah_bacaan kalau user mau).'
-    : 'Bacaan terjemah-saja sudah terkirim (user sedang dalam mode halangan).';
+    ? ' Setelah itu, tawarkan dengan natural apakah mau sekalian dikirim terjemahnya juga (tool kirim_terjemah_bacaan), ATAU langsung lanjut ke kartu berikutnya (tool kirim_bacaan_lanjutan) -- sebut dua opsi ini sebagai pertanyaan singkat di akhir, jangan pisah jadi dua pertanyaan.'
+    : ' User sedang mode halangan (terjemah-saja).';
 
   let bagianPace = '';
   if (statusPace === 'DI_BAWAH_PACE') {
-    bagianPace = ` User punya target cepat (1 juz per ${target} hari) dan masih ${selisihTampilan} dari target hari ini. Sebutkan angka ini APA ADANYA (jangan dikonversi ulang), semangati, dan tawarkan apakah mau lanjut baca kartu berikutnya sekarang juga.`;
+    bagianPace = ` User punya target cepat (1 juz per ${target} hari) dan statusnya "${selisihTampilan}" dari target hari ini (field ini SUDAH termasuk kata "kurang"/"lebih" di depannya, jangan ditambah kata "kurang" lagi). WAJIB sebutkan angka ini APA ADANYA secara konkret di tengah kalimat (contoh gaya: "tinggal ${selisihTampilan} lagi buat nutup target hari ini, dikit banget!"), jangan dikonversi ulang/dihitung ulang, lalu beri semangat singkat.`;
   } else if (statusPace === 'SUDAH_CAPAI_PACE') {
-    // Tetap apresiasi jelas (poin 1), TAPI tetap tawarkan lanjut, bukan ditutup.
-    bagianPace = ` User SUDAH mencapai 100% target pace hari ini (1 juz per ${target} hari), malah ${selisihTampilan} dari target. WAJIB sebutkan eksplisit bahwa target hari ini sudah tercapai/100% (jangan cuma tersirat) dan beri apresiasi hangat. Setelah itu tetap tanyakan apakah user mau lanjut baca kartu berikutnya (sebagai bonus, bukan kewajiban) atau cukup dulu -- JANGAN langsung menyimpulkan sesi selesai.`;
+    bagianPace = ` User SUDAH mencapai 100% target pace hari ini (1 juz per ${target} hari), malah ${selisihTampilan} dari target. WAJIB sebutkan eksplisit bahwa target hari ini sudah tercapai/100% (jangan cuma tersirat) dan beri apresiasi hangat.`;
   }
 
-  return bagianMode + bagianPace;
+  return bagianDasar + bagianMode + bagianPace;
 }
 
 async function kirimBacaanLanjutanUntukAgent(jid) {
@@ -973,8 +976,8 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
     jenis_dikirim: jenisDikirim,
     barusan_khatam: barusanKhatam,
     catatan_untuk_ai: barusanKhatam
-      ? `User BARU SAJA KHATAM! Muter penuh dari titik mulainya dan sekarang kembali ke sana. Ucapkan selamat/apresiasi besar atas pencapaian khatamnya dengan hangat, sebelum lanjut ke catatan progress biasa berikut: ${buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihTampilan)}`
-      : buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihTampilan),
+      ? `User BARU SAJA KHATAM! Muter penuh dari titik mulainya dan sekarang kembali ke sana. Ucapkan selamat/apresiasi besar atas pencapaian khatamnya dengan hangat, sebelum lanjut ke catatan progress biasa berikut: ${buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihTampilan, bacaan.surat_ayat, user.name)}`
+      : buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihTampilan, bacaan.surat_ayat, user.name),
   };
 }
 
