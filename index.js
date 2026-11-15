@@ -167,11 +167,13 @@ function buatPesanAutoReport(nama, suratAyat) {
 const PESAN_TAWARAN_NGAJI_TEMPLATE = (nama) =>
   `Semoga shalatnya diterima Allah ﷻ 🤲\n\n${nama}, sudah siap lanjut tilawah hari ini? Yuk sisihkan sedikit waktu untuk membaca Al-Qur'an 📖\n\nBalas *"ya"* untuk lanjut membaca, atau *"nanti"* kalau belum sempat.`;
 
-const PESAN_SETELAH_YA_ARAB_TEMPLATE = (suratAyat) =>
-  `Barakallahu fiik, semoga menjadi pemberat timbangan kebaikan 🤍\n\nIni bacaan untukmu (${suratAyat}):`;
+const CAPTION_KARTU_ARAB = (suratAyat) => suratAyat;
+const CAPTION_KARTU_TERJEMAH = (suratAyat) => `Terjemah: ${suratAyat}`;
 
-const PESAN_SETELAH_YA_TERJEMAH_TEMPLATE = (suratAyat) =>
-  `Ini artinya (${suratAyat}):`;
+const PESAN_SETELAH_YA_ARAB_TEMPLATE = () =>
+  'Barakallahu fiik, semoga menjadi pemberat timbangan kebaikan 🤍';
+
+const PESAN_SETELAH_YA_TERJEMAH_TEMPLATE = () => null; // sudah tidak dipakai sebagai caption lagi
 
 const PESAN_SETELAH_TIDAK =
   'Tidak apa-apa, Sahabat 🤍 Semoga ada waktu lain untuk kembali dekat dengan Al-Qur\'an hari ini.\n\n"Sebaik-baik amalan adalah yang dilakukan secara rutin meskipun sedikit." (HR. Bukhari & Muslim)\n\nDawam akan selalu ada menemanimu, kapan pun kamu siap 🌙';
@@ -807,8 +809,10 @@ async function kirimBacaanArab(jid) {
   try {
     await sock.sendMessage(jid, {
       image: { url: path.join(__dirname, pathArabDariKode(bacaan.kode)) },
-      caption: PESAN_SETELAH_YA_ARAB_TEMPLATE(bacaan.surat_ayat),
+      caption: CAPTION_KARTU_ARAB(bacaan.surat_ayat),
     });
+    await tunggu(800);
+    await sock.sendMessage(jid, { text: PESAN_SETELAH_YA_ARAB_TEMPLATE() });
   } catch (err) {
     console.error('❌ Gagal kirim bacaan Arab:', err.message);
     return;
@@ -845,7 +849,7 @@ async function kirimBacaanTerjemahSaja(jid) {
   try {
     await sock.sendMessage(jid, {
       image: { url: path.join(__dirname, pathIndoDariKode(bacaan.kode)) },
-      caption: PESAN_SETELAH_YA_TERJEMAH_TEMPLATE(bacaan.surat_ayat),
+      caption: CAPTION_KARTU_TERJEMAH(bacaan.surat_ayat),
     });
   } catch (err) {
     console.error('❌ Gagal kirim bacaan terjemah-saja:', err.message);
@@ -872,8 +876,8 @@ async function kirimBacaanTerjemahSaja(jid) {
 async function kirimGambarBacaanMentah(jid, bacaan, jenis) {
   const relPath = jenis === 'arab' ? pathArabDariKode(bacaan.kode) : pathIndoDariKode(bacaan.kode);
   const caption = jenis === 'arab'
-    ? PESAN_SETELAH_YA_ARAB_TEMPLATE(bacaan.surat_ayat)
-    : PESAN_SETELAH_YA_TERJEMAH_TEMPLATE(bacaan.surat_ayat);
+    ? CAPTION_KARTU_ARAB(bacaan.surat_ayat)
+    : CAPTION_KARTU_TERJEMAH(bacaan.surat_ayat);
   try {
     await sock.sendMessage(jid, { image: { url: path.join(__dirname, relPath) }, caption });
     return true;
