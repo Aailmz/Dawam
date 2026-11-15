@@ -517,18 +517,6 @@ async function handleIncomingMessage(jid, textAsli, textLower) {
     return;
   }
 
-  // Fix: state-machine lama lain juga WAJIB dicek di sini sebelum lempar ke agent.
-  // Tanpa ini, pesan user yang sedang di state ini bisa "dicuri" agent tools.js
-  // (misal kirim_terjemah_bacaan dipanggil ulang padahal user cuma jawab "nanti"),
-  // menyebabkan dua jalur logic saling tabrak/dobel proses.
-  if (state === 'WAITING_CONFIRM') {
-    await handleJawabanTawaranNgaji(jid, textAsli);
-    return;
-  }
-  if (state === 'WAITING_CONFIRM_TERJEMAH') {
-    await handleJawabanTawaranTerjemah(jid, textAsli);
-    return;
-  }
   if (state === 'WAITING_LANJUT_SESI') {
     await handleJawabanLanjutSesi(jid, textAsli);
     return;
@@ -825,7 +813,7 @@ async function kirimBacaanArab(jid) {
   updateLastSentBacaanId(jid, nextUrutan);
   setTanggalTerakhirBaca(jid, new Date().toISOString().slice(0, 10));
   catatLogBacaanHarian(jid, new Date().toISOString().slice(0, 10), nextUrutan, bacaan.surat_ayat, null);
-  setUserState(jid, 'WAITING_CONFIRM_TERJEMAH');
+  setUserState(jid, 'IDLE');
   console.log(`✅ Bacaan Arab terkirim ke ${jid}: ${bacaan.surat_ayat} (kode=${bacaan.kode}, urutan=${nextUrutan})`);
 }
 
@@ -932,6 +920,7 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
       return { sukses: false, pesan: 'Gagal mengirim reminder.' };
     }
     resetNoResponse(jid);
+    setSudahLaporSesiIni(jid, true);
     console.log(`✅ [Agent] Reminder-saja terkirim ke ${jid} (mode bentuk_bacaan='reminder').`);
     return {
       sukses: true,
@@ -998,6 +987,7 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
   }
   setTanggalTerakhirBaca(jid, hariIniISO);
   resetNoResponse(jid);
+  setSudahLaporSesiIni(jid, true);
 
   // Status pace dihitung SEKALI di akhir batch (bukan tiap kartu), berdasarkan akumulasi
   // total hari ini -- lebih akurat daripada status per-kartu yang bisa berubah2 di tengah.
@@ -1033,6 +1023,7 @@ async function kirimTerjemahBacaanUntukAgent(jid) {
   if (!terkirim) {
     return { sukses: false, pesan: 'Gagal mengirim gambar terjemah.' };
   }
+  setSudahLaporSesiIni(jid, true);
 
   const { status: statusPace, selisihTampilan } = hitungStatusPaceUntukAgent(jid);
   let catatan = 'Terjemah sudah terkirim.';
@@ -1178,15 +1169,14 @@ function setupSilentUserChecker() {
     const sekarang = Date.now();
 
     const silentUsers = getAllUsers().filter((u) => {
-      if (u.state !== 'WAITING_CONFIRM') return false;
       if (!u.waktu_tawaran_terakhir) return false;
+      if (u.sudah_lapor_sesi_ini === 1) return false; // sudah ada aktivitas sejak ditawari, bukan silent
       const waktuTawaran = new Date(u.waktu_tawaran_terakhir).getTime();
       return sekarang - waktuTawaran > ambangMs;
     });
 
     for (const u of silentUsers) {
       incrementNoResponse(u.jid);
-      setUserState(u.jid, 'IDLE');
       console.log(`⏳ User ${u.jid} dianggap silent, counter naik.`);
 
       const userTerbaru = getUser(u.jid);
@@ -1258,10 +1248,9 @@ async function kirimTawaranNgaji(jid) {
 
   await sock.sendMessage(jid, { text: pesan });
   simpanChatHistory(jid, 'assistant', pesan);
-  setUserState(jid, 'WAITING_CONFIRM');
   setSudahLaporSesiIni(jid, false);
   setWaktuTawaranTerakhir(jid, new Date().toISOString());
-  console.log(`✅ Tawaran ngaji terkirim ke ${jid}, menunggu balasan...`);
+  console.log(`✅ Tawaran ngaji terkirim ke ${jid}, menunggu balasan (via agent)...`);
 }
 
 // ========== REMINDER JUMAT KHUSUS LAKI-LAKI (poin 5) ==========

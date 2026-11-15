@@ -624,6 +624,7 @@ async function eksekusiNonaktifkanModeHalangan(_, konteks) {
 async function eksekusiCatatUserBelumBaca(_, konteks) {
   db.incrementNoResponse(konteks.jid);
   db.setUserState(konteks.jid, 'IDLE');
+  db.setSudahLaporSesiIni(konteks.jid, true);
   const user = db.getUser(konteks.jid);
 
   return {
