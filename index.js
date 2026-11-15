@@ -893,6 +893,14 @@ function hitungStatusPaceUntukAgent(jid) {
   return { status: sisa.status, selisihTampilan: sisa.selisih_tampilan };
 }
 
+// Jumlah kartu dikirim sekaligus per panggilan kirim_bacaan_lanjutan, sesuai kecepatan
+// target user -- user yang targetnya cepat (butuh banyak bacaan/hari) dikirim
+// beberapa kartu sekaligus biar tidak keseringan harus minta "lanjut" manual satu-satu.
+function tentukanJumlahKartuPerKirim(targetJuzPerHari) {
+  const peta = { '12': 1, '6': 2, '3': 3, '1': 6 };
+  return peta[targetJuzPerHari] || 1; // default 1 kalau belum ada target/tidak dikenali
+}
+
 function buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, target, selisihTampilan, suratAyat, namaUser) {
   const sapa = namaUser || 'Sahabat';
 
@@ -934,50 +942,83 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
 
   const urutanMin = getUrutanMin();
   const urutanMax = getUrutanMax();
-  const urutanSebelumWrap = (user.last_sent_bacaan_id || 0) + 1;
-  let nextUrutan = urutanSebelumWrap;
-  if (nextUrutan > urutanMax) nextUrutan = urutanMin;
-
-  const bacaan = getBacaanByUrutan(nextUrutan);
-  if (!bacaan) {
-    console.log(`⚠️  Bacaan urutan=${nextUrutan} tidak ditemukan (agent).`);
-    return { sukses: false, pesan: 'Data bacaan belum tersedia saat ini.' };
-  }
-
   const modeArabSaja = user.mode_baca_arab_saja === 1;
   const jenisDikirim = modeArabSaja ? 'arab' : 'indo';
-  const terkirim = await kirimGambarBacaanMentah(jid, bacaan, jenisDikirim);
-  if (!terkirim) {
+  const jumlahKartuPerKirim = tentukanJumlahKartuPerKirim(user.target_juz_per_hari);
+
+  let urutanSekarang = user.last_sent_bacaan_id || 0;
+  let startBacaanId = user.start_bacaan_id || 0;
+  const hariIniISO = new Date().toISOString().slice(0, 10);
+
+  let barusanKhatamSekaliSaja = false;
+  let bacaanTerakhirTerkirim = null;
+  let jumlahBerhasilTerkirim = 0;
+
+  for (let i = 0; i < jumlahKartuPerKirim; i++) {
+    const urutanSebelumWrap = urutanSekarang + 1;
+    let nextUrutan = urutanSebelumWrap;
+    if (nextUrutan > urutanMax) nextUrutan = urutanMin;
+
+    const bacaan = getBacaanByUrutan(nextUrutan);
+    if (!bacaan) {
+      console.log(`⚠️  Bacaan urutan=${nextUrutan} tidak ditemukan (agent), berhenti di tengah batch.`);
+      break; // data habis/belum lengkap, hentikan batch tapi tetap lanjut proses yang sudah terkirim
+    }
+
+    const terkirim = await kirimGambarBacaanMentah(jid, bacaan, jenisDikirim);
+    if (!terkirim) {
+      console.log(`⚠️  Gagal kirim 1 kartu di tengah batch (urutan=${nextUrutan}), berhenti di sini.`);
+      break;
+    }
+
+    const barusanKhatam = sudahKhatamSetelahWrap(startBacaanId, urutanSebelumWrap, nextUrutan);
+    if (barusanKhatam) {
+      startBacaanId = nextUrutan - 1 < urutanMin ? urutanMax : nextUrutan - 1;
+      setStartBacaanId(jid, startBacaanId);
+      barusanKhatamSekaliSaja = true;
+    }
+
+    updateLastSentBacaanId(jid, nextUrutan);
+    catatLogBacaanHarian(jid, hariIniISO, nextUrutan, bacaan.surat_ayat, null); // status final dihitung di akhir batch
+
+    urutanSekarang = nextUrutan;
+    bacaanTerakhirTerkirim = bacaan;
+    jumlahBerhasilTerkirim++;
+
+    // Jeda kecil antar kartu biar tidak kelihatan spam/kebanjiran sekaligus di WA.
+    if (i < jumlahKartuPerKirim - 1) await tunggu(700);
+  }
+
+  if (jumlahBerhasilTerkirim === 0) {
     return { sukses: false, pesan: 'Gagal mengirim gambar bacaan.' };
   }
 
-  const startBacaanId = user.start_bacaan_id || 0;
-  const barusanKhatam = sudahKhatamSetelahWrap(startBacaanId, urutanSebelumWrap, nextUrutan);
-  if (barusanKhatam) {
-    setStartBacaanId(jid, nextUrutan - 1 < urutanMin ? urutanMax : nextUrutan - 1);
-  }
-
-  const hariIniISO = new Date().toISOString().slice(0, 10);
   if (!user.tanggal_mulai_baca) {
     setTanggalMulaiBaca(jid, hariIniISO);
   }
   setTanggalTerakhirBaca(jid, hariIniISO);
-  updateLastSentBacaanId(jid, nextUrutan);
   resetNoResponse(jid);
 
+  // Status pace dihitung SEKALI di akhir batch (bukan tiap kartu), berdasarkan akumulasi
+  // total hari ini -- lebih akurat daripada status per-kartu yang bisa berubah2 di tengah.
   const { status: statusPace, selisihTampilan } = hitungStatusPaceUntukAgent(jid);
-  catatLogBacaanHarian(jid, hariIniISO, nextUrutan, bacaan.surat_ayat, statusPace);
-  console.log(`✅ [Agent] Bacaan ${jenisDikirim} terkirim ke ${jid}: ${bacaan.surat_ayat} (kode=${bacaan.kode}, urutan=${nextUrutan})`);
+  console.log(`✅ [Agent] ${jumlahBerhasilTerkirim} kartu ${jenisDikirim} terkirim ke ${jid}, terakhir: ${bacaanTerakhirTerkirim.surat_ayat}`);
+
+  const catatanJumlahKartu = jumlahBerhasilTerkirim > 1
+    ? ` (total ${jumlahBerhasilTerkirim} kartu baru saja dikirim sekaligus sesuai temponya, bukan cuma 1 -- boleh disebutkan sekilas kalau pas, tapi tidak wajib didetailkan satu-satu.)`
+    : '';
 
   return {
     sukses: true,
-    surat_ayat: bacaan.surat_ayat,
-    juz: bacaan.juz,
+    surat_ayat: bacaanTerakhirTerkirim.surat_ayat,
+    juz: bacaanTerakhirTerkirim.juz,
     jenis_dikirim: jenisDikirim,
-    barusan_khatam: barusanKhatam,
-    catatan_untuk_ai: barusanKhatam
-      ? `User BARU SAJA KHATAM! Muter penuh dari titik mulainya dan sekarang kembali ke sana. Ucapkan selamat/apresiasi besar atas pencapaian khatamnya dengan hangat, sebelum lanjut ke catatan progress biasa berikut: ${buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihTampilan, bacaan.surat_ayat, user.name)}`
-      : buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihTampilan, bacaan.surat_ayat, user.name),
+    jumlah_kartu_terkirim: jumlahBerhasilTerkirim,
+    barusan_khatam: barusanKhatamSekaliSaja,
+    catatan_untuk_ai: (barusanKhatamSekaliSaja
+      ? `User BARU SAJA KHATAM! Muter penuh dari titik mulainya dan sekarang kembali ke sana. Ucapkan selamat/apresiasi besar atas pencapaian khatamnya dengan hangat, sebelum lanjut ke catatan progress biasa berikut: ${buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihTampilan, bacaanTerakhirTerkirim.surat_ayat, user.name)}`
+      : buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihTampilan, bacaanTerakhirTerkirim.surat_ayat, user.name)
+    ) + catatanJumlahKartu,
   };
 }
 
