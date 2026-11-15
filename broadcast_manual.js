@@ -11,15 +11,12 @@ const { getAllGroupsAktif } = require('./db');
 // Diawali salam karena ini pesan baru/broadcast, bukan balasan ke siapapun.
 
 const PESAN_PENGUMUMAN_FITUR_BERHENTI =
-  `Assalamu'alaikum, Sahabat Dawam semua 🤍\n\n` +
-  `Mau kasih kabar baik nih 😊\n\n` +
-  `Setelah kemarin ada migrasi besar ke skema Mushaf Madinah dan beberapa dari kalian sempat ngerasain progress yang nyangkut, kartu yang gagal terkirim, atau keliatan aneh, alhamdulillah semuanya sudah dirapihin dan dicek ulang satu-satu 🤍\n\n` +
-  `Kalau kemarin pas ada gangguan kalian sempat disaranin baca dari mushaf sendiri dulu dan lapor manual ke Dawam, sekarang udah boleh balik ke kartu kayak biasa kok, tinggal bilang aja: _"kartu lagi aja"_ ke Dawam di chat pribadi 😊\n\n` +
-  `Oh iya, sekalian diingetin lagi ya, Dawam sekarang fleksibel banget, semua fitur (reminder sholat, tawaran tilawah, bentuk bacaan kartu/reminder teks, Al-Kahfi, dll) bisa kamu atur sendiri sesuai yang paling nyaman buat kamu. Mau tetap pakai kartu, mau pindah ke reminder teks aja, dua-duanya sah-sah aja, tinggal bilang ke Dawam pakai bahasa biasa 😊\n\n` +
-  `Mau cek pengaturanmu sekarang gimana? Tinggal tanya aja: _"pengaturanku gimana?"_ nanti Dawam kasih liat semuanya.\n\n` +
-  `Makasih banyak buat yang udah sabar dan mau lapor pas nemu yang kerasa ganjil kemarin, itu sangat membantu Dawam buat benerin satu-satu 🙏\n\n` +
-  `Kalau masih ada yang kerasa belum pas, tetap boleh banget lapor di grup ini ya.\n\n` +
-  `Semoga tilawah kita semua tetap istiqomah ya. Barakallahu fiikum 🌙`;
+  `Izin nimbrung ya 🙏\n\n` +
+  `Makasih banget buat yang udah lapor soal "ga bisa menuju surah" dan "penghitungan halaman salah" di atas. Dawam bantu infoin kalo memang sempat ada maintenance besar Dawam, jadi kadang ke-reset ke 0/awal mushaf ketimbang ke posisi yang bener 🙏 Sekarang udah mulai bener.\n\n` +
+  `Mohon maaf buat yang sempat ngerasain progress-nya kelihatan aneh atau gak nyambung. Kalau ada yang masih terasa salah sampai sekarang, boleh banget lapor lagi di grup ini ya, biar langsung dicek posisinya.\n\n` +
+  `Sekalian, Dawam juga mau jelasin biar laporan ke depan makin pas: kalau kalian lapor "udah sampai ayat sekian" tanpa nyebut mulai dari mana, sekarang Dawam bakal tanya dulu buat konfirmasi (misal: "dari posisi terakhir lanjut sampai situ ya?"), jadi gak akan asal catat lagi walau yang disebut keliatannya kurang jelas.\n\n` +
+  `Dan kalau kalian ngerasa ada yang salah catat (posisi meleset, dll), sekarang bisa langsung bilang aja ke Dawam di chat pribadi, misal: _"itu salah, harusnya aku di surat X ayat Y"_ -- nanti Dawam konfirmasi dulu baru dibenerin, gampang kok 😊\n\n` +
+  `Makasih banyak udah sabar ya, Sahabat Dawam 🤍`;
   
 // ========== HELPER ==========
 
