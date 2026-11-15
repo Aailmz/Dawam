@@ -14,6 +14,14 @@ const TOOLS_PERSONAL = [
   {
     type: 'function',
     function: {
+      name: 'get_info_mushaf',
+      description: 'Ambil data FAKTA soal struktur mushaf Dawam: total kartu/card keseluruhan, dan jumlah kartu di tiap juz (1-30). WAJIB panggil ini kalau user tanya soal total kartu, berapa kartu di suatu juz, atau pertanyaan struktural lain soal mushaf -- JANGAN mengarang angka ini dari asumsi (jumlah kartu per juz TIDAK rata/sama).',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'kirim_bacaan_lanjutan',
       description: 'Kirim gambar bacaan Al-Quran berikutnya (Arab, atau terjemah-saja kalau user sedang mode halangan) ke user, lalu update posisi terakhirnya. Panggil kalau user minta lanjut baca / siap tilawah.',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -233,6 +241,14 @@ const TOOLS_GRUP = [
     function: {
       name: 'get_rekap_progress_grup',
       description: 'Ambil rekap progress tilawah semua anggota grup ini. Panggil kalau ada yang tanya progress grup / siapa aja yang udah jalan, dalam bentuk jawaban singkat natural.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_info_mushaf',
+      description: 'Ambil data FAKTA soal struktur mushaf Dawam: total kartu/card keseluruhan, dan jumlah kartu di tiap juz (1-30). WAJIB panggil ini kalau user tanya soal total kartu, berapa kartu di suatu juz, atau pertanyaan struktural lain soal mushaf -- JANGAN mengarang angka ini dari asumsi (jumlah kartu per juz TIDAK rata/sama).',
       parameters: { type: 'object', properties: {}, required: [] },
     },
   },
@@ -460,6 +476,21 @@ async function eksekusiGetProgressUser(_, konteks) {
   };
 }
 
+async function eksekusiGetInfoMushaf(_, konteks) {
+  const totalKartu = db.countBacaan();
+  const daftarPerJuz = [];
+  for (let juz = 1; juz <= 30; juz++) {
+    daftarPerJuz.push({ juz, jumlah_kartu: db.hitungJumlahKartuDalamJuz(juz) });
+  }
+
+  return {
+    sukses: true,
+    total_kartu_keseluruhan: totalKartu,
+    jumlah_kartu_per_juz: daftarPerJuz,
+    catatan_untuk_ai: 'Data ini FINAL dan akurat dari database, pakai apa adanya. Jumlah kartu per juz BERBEDA-BEDA (tidak rata 30/juz) karena ngikutin panjang-pendeknya ayat di skema Mushaf Madinah -- JANGAN asumsikan rata/sama, JANGAN menghitung sendiri, JANGAN membulatkan. Kalau user tanya soal juz tertentu, cari angkanya di jumlah_kartu_per_juz sesuai nomor juz yang ditanya.',
+  };
+}
+
 async function eksekusiSetPosisiBacaan({ nama_surat }, konteks) {
   const bacaan = db.cariBacaanBySuratLike(nama_surat);
   if (!bacaan) {
@@ -632,6 +663,7 @@ async function eksekusiBroadcastKeGrupSosial({ isi_pesan }, konteks) {
 
 const EKSEKUTOR_PERSONAL = {
   get_progress_user: eksekusiGetProgressUser,
+  get_info_mushaf: eksekusiGetInfoMushaf,
   kirim_bacaan_lanjutan: eksekusiKirimBacaanLanjutan,
   kirim_terjemah_bacaan: eksekusiKirimTerjemahBacaan,
   aktifkan_mode_terjemah_halangan: eksekusiAktifkanModeHalangan,
@@ -763,6 +795,7 @@ async function eksekusiKlaimCardKawan({ nama_target }, konteks) {
 
 const EKSEKUTOR_GRUP = {
   get_rekap_progress_grup: eksekusiGetRekapProgressGrup,
+  get_info_mushaf: eksekusiGetInfoMushaf,
   minta_rekap_harian: eksekusiMintaRekapHarian,
   tag_anggota_grup: eksekusiTagAnggotaGrup,
   set_grup_sosial_ini: eksekusiSetGrupSosialIni,
