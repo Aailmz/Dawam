@@ -3,6 +3,39 @@ const path = require('path');
 
 const db = new Database(path.join(__dirname, 'dawam.db'));
 
+// ========== TANGGAL (WIB) ==========
+// SEMUA tanggal "hari ini" di aplikasi WAJIB lewat helper ini, bukan
+// new Date().toISOString().slice(0, 10) -- itu tanggal UTC, jadi laporan antara jam
+// 00:00-07:00 WIB tercatat ke tanggal kemarin dan tidak terhitung di rekap harian.
+const ZONA_WAKTU_APP = 'Asia/Jakarta';
+const formatterTanggal = new Intl.DateTimeFormat('en-CA', {
+  timeZone: ZONA_WAKTU_APP,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+// 'YYYY-MM-DD' menurut WIB. date opsional (default sekarang).
+function tanggalISO(date = new Date()) {
+  return formatterTanggal.format(date);
+}
+
+function tanggalHariIniISO() {
+  return tanggalISO(new Date());
+}
+
+// Tanggal N hari sebelum hari ini (WIB), format 'YYYY-MM-DD'.
+function tanggalMundurISO(jumlahHari) {
+  return tanggalISO(new Date(Date.now() - jumlahHari * 24 * 60 * 60 * 1000));
+}
+
+// Selisih hari kalender antara dua string 'YYYY-MM-DD' (akhir - awal), tanpa efek timezone.
+function selisihHariISO(awalISO, akhirISO) {
+  const [ya, ma, da] = awalISO.split('-').map(Number);
+  const [yb, mb, dbb] = akhirISO.split('-').map(Number);
+  return Math.round((Date.UTC(yb, mb - 1, dbb) - Date.UTC(ya, ma - 1, da)) / (24 * 60 * 60 * 1000));
+}
+
 // ========== SKEMA ==========
 
 db.exec(`
@@ -184,6 +217,24 @@ tambahKolomJikaBelumAda('users', 'tawaran_tilawah_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'tawaran_alkahfi_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'reminder_jumat_laki_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'bentuk_bacaan', "TEXT DEFAULT 'kartu'"); // 'kartu' | 'reminder'
+
+// Migrasi (idempotent): user yang cuma lapor manual tidak pernah dapat tanggal_mulai_baca
+// (dulu cuma diisi saat kirim kartu), sehingga hitungSisaProgressUser menganggap mereka
+// "tanpa target" dan persen rekap harian-nya tidak pernah terhitung. Isi dari tanggal
+// log pertama mereka.
+const jumlahDiperbaiki = db
+  .prepare(`
+    UPDATE users
+    SET tanggal_mulai_baca = (
+      SELECT MIN(l.tanggal) FROM log_bacaan_harian l WHERE l.user_jid = users.jid
+    )
+    WHERE (tanggal_mulai_baca IS NULL OR tanggal_mulai_baca = '')
+      AND EXISTS (SELECT 1 FROM log_bacaan_harian l WHERE l.user_jid = users.jid)
+  `)
+  .run().changes;
+if (jumlahDiperbaiki > 0) {
+  console.log(`✅ Migrasi: tanggal_mulai_baca diisi untuk ${jumlahDiperbaiki} user dari log bacaan pertama mereka.`);
+}
 
 // ========== BACAAN ==========
 
@@ -509,11 +560,16 @@ function updateUserFields(jid, data) {
 function hitungHariBerjalanUser(jid) {
   const user = getUser(jid);
   if (!user.tanggal_mulai_baca) return null;
-  const mulai = new Date(user.tanggal_mulai_baca);
-  const sekarang = new Date();
-  const mulaiTengahMalam = new Date(mulai.getFullYear(), mulai.getMonth(), mulai.getDate());
-  const sekarangTengahMalam = new Date(sekarang.getFullYear(), sekarang.getMonth(), sekarang.getDate());
-  return Math.floor((sekarangTengahMalam - mulaiTengahMalam) / (1000 * 60 * 60 * 24)) + 1;
+  return selisihHariISO(user.tanggal_mulai_baca, tanggalHariIniISO()) + 1;
+}
+
+// Pastikan tanggal_mulai_baca terisi. Dipanggil dari SEMUA jalur pencatatan bacaan
+// (kartu maupun lapor manual) supaya user yang cuma lapor manual tetap punya target.
+function pastikanTanggalMulaiBaca(jid, tanggalISOMulai = tanggalHariIniISO()) {
+  const user = getUser(jid);
+  if (user && !user.tanggal_mulai_baca) {
+    setTanggalMulaiBaca(jid, tanggalISOMulai);
+  }
 }
 
 function totalKartuKeseluruhan() {
@@ -568,7 +624,7 @@ function hitungSisaProgressUser(jid) {
   const startBacaanId = user.start_bacaan_id || 0;
   const halamanDitempuh = hitungHalamanDitempuhDenganWrap(startBacaanId, posisiSekarang);
 
-  const hariIniISOAwal = new Date().toISOString().slice(0, 10);
+  const hariIniISOAwal = tanggalHariIniISO();
   if (!user.target_juz_per_hari || !user.tanggal_mulai_baca) {
     return {
       ada_target: false,
@@ -606,8 +662,7 @@ function hitungSisaProgressUser(jid) {
   // sebelumnya. Dibandingkan dengan halaman yang ditempuh HARI INI SAJA, bukan
   // halamanDitempuh total sejak mulai.
   const halamanTarget = Math.round(halamanPerHari);
-  const hariIniISOUntukLog = new Date().toISOString().slice(0, 10);
-  const logHariIni = getLogBacaanHarianByTanggal(jid, hariIniISOUntukLog);
+  const logHariIni = getLogBacaanHarianByTanggal(jid, tanggalHariIniISO());
   const halamanDitempuhHariIni = logHariIni?.jumlah_kartu || 0;
   const selisihHalaman = halamanTarget - halamanDitempuhHariIni;
 
@@ -624,8 +679,7 @@ function hitungSisaProgressUser(jid) {
   const persenPace = persenPaceMentah !== null
     ? (status === 'SUDAH_CAPAI_PACE' || status === 'PAS_PACE' ? 100 : persenPaceMentah)
     : null;
-  const hariIniISO = new Date().toISOString().slice(0, 10);
-  const sudahBacaHariIni = user.tanggal_terakhir_baca === hariIniISO;
+  const sudahBacaHariIni = user.tanggal_terakhir_baca === tanggalHariIniISO();
 
   return {
     ada_target: true,
@@ -649,23 +703,26 @@ function hitungSisaProgressUser(jid) {
 
 // Upsert: kalau user udah kirim log hari itu, update bacaan_id_akhir/jumlah_kartu-nya.
 // Dipanggil tiap kali kirimBacaanLanjutanUntukAgent sukses ngirim (index.js).
-function catatLogBacaanHarian(userJid, tanggalISO, bacaanId, suratAyat, statusPace) {
+// jumlahKartu: default 1 (satu kartu terkirim). Lapor by-ayat mengisi selisih posisi
+// supaya lompatan beberapa halaman tidak cuma dihitung 1.
+function catatLogBacaanHarian(userJid, tanggalLog, bacaanId, suratAyat, statusPace, jumlahKartu = 1) {
+  const tambah = Number.isInteger(jumlahKartu) && jumlahKartu > 0 ? jumlahKartu : 1;
   const existing = db
     .prepare('SELECT * FROM log_bacaan_harian WHERE user_jid = ? AND tanggal = ?')
-    .get(userJid, tanggalISO);
+    .get(userJid, tanggalLog);
 
   if (!existing) {
     db.prepare(`
       INSERT INTO log_bacaan_harian
         (user_jid, tanggal, bacaan_id_awal, bacaan_id_akhir, surat_ayat_akhir, jumlah_kartu, status_pace_akhir)
-      VALUES (?, ?, ?, ?, ?, 1, ?)
-    `).run(userJid, tanggalISO, bacaanId, bacaanId, suratAyat, statusPace || null);
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(userJid, tanggalLog, bacaanId, bacaanId, suratAyat, tambah, statusPace || null);
   } else {
     db.prepare(`
       UPDATE log_bacaan_harian
-      SET bacaan_id_akhir = ?, surat_ayat_akhir = ?, jumlah_kartu = jumlah_kartu + 1, status_pace_akhir = ?
+      SET bacaan_id_akhir = ?, surat_ayat_akhir = ?, jumlah_kartu = jumlah_kartu + ?, status_pace_akhir = ?
       WHERE user_jid = ? AND tanggal = ?
-    `).run(bacaanId, suratAyat, statusPace || null, userJid, tanggalISO);
+    `).run(bacaanId, suratAyat, tambah, statusPace || null, userJid, tanggalLog);
   }
 }
 
@@ -881,6 +938,13 @@ function getChatHistory(chatJid, limit = 12) {
 }
 
 module.exports = {
+  // tanggal WIB
+  tanggalISO,
+  tanggalHariIniISO,
+  tanggalMundurISO,
+  selisihHariISO,
+  pastikanTanggalMulaiBaca,
+
   db,
 
   // bacaan

@@ -1,3 +1,7 @@
+// Seluruh logika tanggal/jadwal Dawam berbasis WIB. Dipasang SEBELUM modul lain dimuat
+// supaya cron ('0 20 * * *' = jam 20:00 WIB) dan Date lokal konsisten walau server di UTC.
+process.env.TZ = process.env.TZ || 'Asia/Jakarta';
+
 require('dotenv').config();
 
 const {
@@ -74,6 +78,9 @@ const {
   updateLastSentAlkahfiId,
   setTanggalTerakhirAlkahfi,
   OPSI_TARGET_VALID,
+  // tanggal WIB
+  tanggalHariIniISO,
+  tanggalMundurISO,
 } = require('./db');
 const groqAI = require('./groq');
 const {
@@ -806,13 +813,14 @@ async function kirimBacaanArab(jid) {
     return;
   }
 
+  const hariIniWIB = tanggalHariIniISO();
   if (!user.tanggal_mulai_baca) {
-    setTanggalMulaiBaca(jid, new Date().toISOString().slice(0, 10));
+    setTanggalMulaiBaca(jid, hariIniWIB);
   }
 
   updateLastSentBacaanId(jid, nextUrutan);
-  setTanggalTerakhirBaca(jid, new Date().toISOString().slice(0, 10));
-  catatLogBacaanHarian(jid, new Date().toISOString().slice(0, 10), nextUrutan, bacaan.surat_ayat, null);
+  setTanggalTerakhirBaca(jid, hariIniWIB);
+  catatLogBacaanHarian(jid, hariIniWIB, nextUrutan, bacaan.surat_ayat, null);
   setUserState(jid, 'IDLE');
   console.log(`✅ Bacaan Arab terkirim ke ${jid}: ${bacaan.surat_ayat} (kode=${bacaan.kode}, urutan=${nextUrutan})`);
 }
@@ -844,13 +852,14 @@ async function kirimBacaanTerjemahSaja(jid) {
     return;
   }
 
+  const hariIniWIB = tanggalHariIniISO();
   if (!user.tanggal_mulai_baca) {
-    setTanggalMulaiBaca(jid, new Date().toISOString().slice(0, 10));
+    setTanggalMulaiBaca(jid, hariIniWIB);
   }
 
   updateLastSentBacaanId(jid, nextUrutan);
-  setTanggalTerakhirBaca(jid, new Date().toISOString().slice(0, 10));
-  catatLogBacaanHarian(jid, new Date().toISOString().slice(0, 10), nextUrutan, bacaan.surat_ayat, null);
+  setTanggalTerakhirBaca(jid, hariIniWIB);
+  catatLogBacaanHarian(jid, hariIniWIB, nextUrutan, bacaan.surat_ayat, null);
   console.log(`✅ Terjemah-saja terkirim ke ${jid}: ${bacaan.surat_ayat} (kode=${bacaan.kode}, urutan=${nextUrutan})`);
 
   await cekKecepatanDanTawarkanLanjut(jid);
@@ -937,7 +946,7 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
 
   let urutanSekarang = user.last_sent_bacaan_id || 0;
   let startBacaanId = user.start_bacaan_id || 0;
-  const hariIniISO = new Date().toISOString().slice(0, 10);
+  const hariIniISO = tanggalHariIniISO();
 
   let barusanKhatamSekaliSaja = false;
   let bacaanTerakhirTerkirim = null;
@@ -1426,11 +1435,8 @@ let groupMotivasiSchedulerSudahDiset = false;
 
 function formatRekapMingguanTerstruktur(groupJid) {
   const anggotaJids = getAnggotaGroup(groupJid);
-  const hariIni = new Date();
-  const tanggalSelesai = hariIni.toISOString().slice(0, 10);
-  const tanggalMulai = new Date(hariIni);
-  tanggalMulai.setDate(tanggalMulai.getDate() - 6);
-  const tanggalMulaiISO = tanggalMulai.toISOString().slice(0, 10);
+  const tanggalSelesai = tanggalHariIniISO();
+  const tanggalMulaiISO = tanggalMundurISO(6);
 
   const baris = [];
   let adaDataSamaSekali = false;
@@ -1544,6 +1550,15 @@ function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
   let teks = '📊 *Rekap Tilawah Hari Ini*\n\n';
 
   for (const d of sudahAktif) {
+    // Belum ada target harian yang terhitung (target belum diset / belum pernah mulai baca):
+    // persennya memang tidak bisa dihitung, JANGAN dipaksa tampil "0%" karena menyesatkan.
+    if (d.halaman_target_hari_ini === null || d.halaman_target_hari_ini === undefined) {
+      teks += d.sudah_baca_hari_ini
+        ? `✅ *${d.nama}* — sudah baca hari ini (target harian belum terhitung)\n\n`
+        : `💤 *${d.nama}* — belum mulai tilawah (target harian belum terhitung)\n\n`;
+      continue;
+    }
+
     let persenTampilan;
     if (d.persen_pace !== null && d.persen_pace !== undefined) {
       persenTampilan = `${d.persen_pace}%`;
@@ -1711,7 +1726,7 @@ async function kirimCardAlkahfiLanjutan(jid) {
   }
 
   updateLastSentAlkahfiId(jid, nextUrutan);
-  setTanggalTerakhirAlkahfi(jid, new Date().toISOString().slice(0, 10));
+  setTanggalTerakhirAlkahfi(jid, tanggalHariIniISO());
   console.log(`✅ Card Al-Kahfi terkirim ke ${jid}: ${bacaan.surat_ayat} (kode=${bacaan.kode}, urutan=${nextUrutan})`);
   return { sukses: true, surat_ayat: bacaan.surat_ayat };
 }

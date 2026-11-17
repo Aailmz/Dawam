@@ -31,7 +31,7 @@ const TOOLS_PERSONAL = [
     type: 'function',
     function: {
       name: 'lapor_bacaan_manual',
-      description: 'Catat laporan bacaan manual dari user yang sedang mode reminder-saja (bentuk_bacaan="reminder", tanpa kartu gambar). WAJIB panggil ini kalau user melaporkan sudah baca berapa halaman hari ini. JANGAN panggil untuk user mode kartu -- progress mereka sudah otomatis tercatat lewat kirim_bacaan_lanjutan.',
+      description: 'Catat laporan bacaan manual (perkiraan jumlah halaman) dari user, untuk SEMUA mode (reminder-saja maupun kartu -- user mode kartu juga bisa baca di luar kartu, misal dari mushaf/app lain). WAJIB panggil ini (setelah konfirmasi rentang bacaan ke user) kalau user melaporkan sudah baca berapa halaman hari ini; tanpa pemanggilan tool ini laporannya TIDAK tercatat dan tidak masuk rekap harian. Kalau user menyebut surat+ayat spesifik, pakai lapor_bacaan_by_ayat.',
       parameters: {
         type: 'object',
         properties: {
@@ -48,7 +48,7 @@ const TOOLS_PERSONAL = [
     type: 'function',
     function: {
       name: 'lapor_bacaan_by_ayat',
-      description: 'Catat progress bacaan berdasarkan surat+ayat yang disebut user (bukan jumlah halaman), dipakai untuk user mode reminder-saja supaya tidak ada ketidaksesuaian antara card Dawam dan halaman fisik mushaf/app user. Posisi akan di-set ke card yang mengandung ayat tersebut. WAJIB panggil ini (bukan lapor_bacaan_manual) kalau user menyebutkan surat+ayat spesifik, misal "udah sampe Al-Baqarah ayat 50".',
+      description: 'Catat progress bacaan berdasarkan surat+ayat yang disebut user (bukan jumlah halaman), untuk SEMUA mode (reminder-saja maupun kartu), supaya tidak ada ketidaksesuaian antara card Dawam dan halaman fisik mushaf/app user. Posisi akan di-set ke card yang mengandung ayat tersebut dan jumlah kartu yang maju ikut dihitung ke target hari ini. WAJIB panggil ini (bukan lapor_bacaan_manual) kalau user menyebutkan surat+ayat spesifik, misal "udah sampe Al-Baqarah ayat 50"; tanpa pemanggilan tool ini laporannya TIDAK tercatat dan tidak masuk rekap harian.',
       parameters: {
         type: 'object',
         properties: {
@@ -290,6 +290,38 @@ const TOOLS_GRUP = [
   {
     type: 'function',
     function: {
+      name: 'lapor_bacaan_manual',
+      description: 'Catat laporan bacaan (perkiraan jumlah halaman) milik ORANG YANG BICARA di grup ini, supaya masuk rekap harian. WAJIB panggil kalau si pengirim pesan melaporkan sudah baca sekian halaman hari ini; tanpa pemanggilan tool ini laporannya TIDAK tercatat. Hanya untuk pengirim pesan sendiri, bukan untuk orang lain. Kalau pengirim cuma bilang "udah baca" tanpa angka sama sekali, JANGAN panggil, tanya dulu kira-kira berapa halaman.',
+      parameters: {
+        type: 'object',
+        properties: {
+          jumlah_halaman: {
+            type: 'number',
+            description: 'Perkiraan jumlah halaman yang BARU SAJA dibaca pengirim HARI INI, sesuai pesannya.',
+          },
+        },
+        required: ['jumlah_halaman'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'lapor_bacaan_by_ayat',
+      description: 'Catat progress bacaan milik ORANG YANG BICARA di grup berdasarkan surat+ayat yang dia sebut (misal "udah sampe Al-Baqarah ayat 50"), supaya masuk rekap harian. WAJIB panggil (bukan lapor_bacaan_manual) kalau pengirim menyebut surat+ayat spesifik; tanpa pemanggilan tool ini laporannya TIDAK tercatat. Hanya untuk pengirim pesan sendiri.',
+      parameters: {
+        type: 'object',
+        properties: {
+          nama_surat: { type: 'string', description: 'Nama surat yang disebutkan, apa adanya (contoh: "Al-Baqarah").' },
+          nomor_ayat: { type: 'number', description: 'Nomor ayat yang disebutkan.' },
+        },
+        required: ['nama_surat', 'nomor_ayat'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'minta_rekap_harian',
       description: 'Kirim pesan rekap harian progress grup (termasuk persen capaian dari target harian, dan otomatis nge-tag anggota yang belum baca sama sekali hari ini) ke grup ini SEKARANG JUGA. Panggil kalau ada yang eksplisit minta "kirim rekap harian", "berapa persen progress hari ini", "tag yang belum baca/belum tilawah hari ini", atau semacamnya -- beda dari get_rekap_progress_grup yang untuk pertanyaan spontan biasa tanpa perlu kirim pesan rekap terpisah.',
       parameters: { type: 'object', properties: {}, required: [] },
@@ -370,7 +402,7 @@ async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
 
   // Fix: cek TOTAL akumulasi hari ini (termasuk laporan sebelumnya hari yang sama)
   // supaya user tidak bisa lapor "20 halaman" berkali-kali jadi ratusan dalam sehari.
-  const hariIniISO = new Date().toISOString().slice(0, 10);
+  const hariIniISO = db.tanggalHariIniISO();
   const logHariIni = db.getLogBacaanHarianByTanggal(konteks.jid, hariIniISO);
   const sudahDilaporkanHariIni = logHariIni?.jumlah_kartu || 0;
   const totalSetelahIni = sudahDilaporkanHariIni + jumlah_halaman;
@@ -388,10 +420,12 @@ async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
 
   db.catatLaporanBacaanManual(konteks.jid, hariIniISO, jumlah_halaman);
   db.setTanggalTerakhirBaca(konteks.jid, hariIniISO);
+  // Tanpa ini user yang cuma lapor manual dianggap "tanpa target" (persen rekap tidak terhitung).
+  db.pastikanTanggalMulaiBaca(konteks.jid, hariIniISO);
   db.resetNoResponse(konteks.jid);
 
   const sisa = db.hitungSisaProgressUser(konteks.jid);
-  const catatanModeKartu = modeKartu
+  const catatanModeKartu = modeKartu && !konteks.dariGrup
     ? ' CATATAN TAMBAHAN: user ini masih mode KARTU (bukan reminder), tapi baru saja lapor manual seperti mode reminder. Setelah apresiasi progress, sebutkan dengan santai bahwa dia sebenarnya masih dalam mode kartu (jadi nanti tetap akan dikirimi gambar kartu juga), dan tawarkan (bukan paksa) apakah mau sekalian pindah ke mode reminder teks biar gak dobel sama laporan manualnya -- bilang "kartu gausah dulu"/"reminder aja" kalau mau pindah. Kalau dia tidak merespons soal ini atau menolak, tidak apa-apa, tetap lanjut seperti biasa.'
     : '';
 
@@ -450,16 +484,20 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
   // kirim_bacaan_lanjutan yang selalu nambah incremental.
   db.updateLastSentBacaanId(konteks.jid, bacaanDitemukan.urutan);
 
-  const hariIniISO = new Date().toISOString().slice(0, 10);
+  const hariIniISO = db.tanggalHariIniISO();
   db.setTanggalTerakhirBaca(konteks.jid, hariIniISO);
+  db.pastikanTanggalMulaiBaca(konteks.jid, hariIniISO);
   db.resetNoResponse(konteks.jid);
 
-  // Catat ke log harian juga supaya konsisten dengan hitungSisaProgressUser (persen_pace
-  // hari ini dihitung dari jumlah_kartu di log_bacaan_harian) -- reuse 1 "kartu" per lapor.
-  db.catatLogBacaanHarian(konteks.jid, hariIniISO, bacaanDitemukan.urutan, bacaanDitemukan.surat_ayat, null);
+  // Catat ke log harian supaya konsisten dengan hitungSisaProgressUser (persen_pace hari
+  // ini dihitung dari jumlah_kartu di log_bacaan_harian). Jumlah kartu = berapa kartu
+  // yang maju dari posisi sebelumnya (bukan selalu 1), minimal 1. Kalau belum ada posisi
+  // sebelumnya, tidak ada pembanding yang bisa dipercaya, jadi dihitung 1.
+  const jumlahKartuBaru = posisiSebelumnya && selisihUrutan > 0 ? selisihUrutan : 1;
+  db.catatLogBacaanHarian(konteks.jid, hariIniISO, bacaanDitemukan.urutan, bacaanDitemukan.surat_ayat, null, jumlahKartuBaru);
 
   const sisa = db.hitungSisaProgressUser(konteks.jid);
-  const catatanModeKartu = modeKartu
+  const catatanModeKartu = modeKartu && !konteks.dariGrup
     ? ' CATATAN TAMBAHAN: user ini masih mode KARTU (bukan reminder), tapi baru saja lapor manual by-ayat. Setelah apresiasi progress, sebutkan dengan santai bahwa dia sebenarnya masih dalam mode kartu, dan tawarkan (bukan paksa) apakah mau sekalian pindah ke mode reminder teks biar gak dobel sama laporan manualnya. Kalau tidak direspons/ditolak, tidak apa-apa.'
     : '';
 
@@ -512,9 +550,7 @@ async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_a
     }
     const mapHari = { hari_ini: 0, kemarin: 1, dua_hari_lalu: 2, tiga_hari_lalu: 3 };
     const mundur = mapHari[tanggal_relatif] ?? 0;
-    const tanggal = new Date();
-    tanggal.setDate(tanggal.getDate() - mundur);
-    const tanggalISO = tanggal.toISOString().slice(0, 10);
+    const tanggalISO = db.tanggalMundurISO(mundur);
 
     db.catatLogBacaanHarian(konteks.jid, tanggalISO, bacaanDitemukan.urutan, bacaanDitemukan.surat_ayat, null);
 
@@ -540,12 +576,7 @@ function hitungGapHariTanpaLapor(jid) {
   const user = db.getUser(jid);
   if (!user.tanggal_terakhir_baca) return null;
 
-  const terakhir = new Date(user.tanggal_terakhir_baca);
-  const hariIni = new Date();
-  const terakhirTengahMalam = new Date(terakhir.getFullYear(), terakhir.getMonth(), terakhir.getDate());
-  const hariIniTengahMalam = new Date(hariIni.getFullYear(), hariIni.getMonth(), hariIni.getDate());
-
-  const selisihHari = Math.floor((hariIniTengahMalam - terakhirTengahMalam) / (1000 * 60 * 60 * 24));
+  const selisihHari = db.selisihHariISO(user.tanggal_terakhir_baca, db.tanggalHariIniISO());
   return selisihHari; // 0 = hari ini juga udah lapor, 1 = kemarin terakhir, dst.
 }
 async function eksekusiGetProgressUser(_, konteks) {
@@ -687,9 +718,7 @@ async function eksekusiGetPengaturanUser(_, konteks) {
 async function eksekusiTanyaBacaanHariLain({ tanggal_relatif }, konteks) {
   const mapHari = { kemarin: 1, dua_hari_lalu: 2, tiga_hari_lalu: 3 };
   const mundur = mapHari[tanggal_relatif] || 1;
-  const tanggal = new Date();
-  tanggal.setDate(tanggal.getDate() - mundur);
-  const tanggalISO = tanggal.toISOString().slice(0, 10);
+  const tanggalISO = db.tanggalMundurISO(mundur);
 
   const log = db.getLogBacaanHarianByTanggal(konteks.jid, tanggalISO);
   if (!log) {
@@ -887,7 +916,25 @@ async function eksekusiKlaimCardKawan({ nama_target }, konteks) {
   };
 }
 
+// Lapor bacaan dari dalam grup: dicatat ke akun PERSONAL si pengirim (konteks.senderJid),
+// pakai logic yang sama persis dengan lapor di chat pribadi supaya masuk log harian + rekap.
+function bungkusLaporDariGrup(eksekutorPersonal) {
+  return async (args, konteks) => {
+    const user = db.getUser(konteks.senderJid);
+    if (!user || user.is_registered !== 1) {
+      return {
+        sukses: false,
+        pesan: 'Pengirim belum aktivasi personal, jadi laporannya belum bisa dicatat.',
+        catatan_untuk_ai: 'JANGAN bilang laporannya sudah tercatat. Tanggapi hangat, lalu ajak dia kirim kata "dawam" ke chat pribadi dulu biar progressnya bisa tercatat, baru lapor lagi.',
+      };
+    }
+    return eksekutorPersonal(args, { ...konteks, jid: konteks.senderJid, dariGrup: true });
+  };
+}
+
 const EKSEKUTOR_GRUP = {
+  lapor_bacaan_manual: bungkusLaporDariGrup(eksekusiLaporBacaanManual),
+  lapor_bacaan_by_ayat: bungkusLaporDariGrup(eksekusiLaporBacaanByAyat),
   get_rekap_progress_grup: eksekusiGetRekapProgressGrup,
   get_info_mushaf: eksekusiGetInfoMushaf,
   minta_rekap_harian: eksekusiMintaRekapHarian,
