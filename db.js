@@ -1,88 +1,7 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-// DAWAM_DB_PATH hanya untuk test/dev (mis. ':memory:'); default tetap dawam.db di folder project.
-const db = new Database(process.env.DAWAM_DB_PATH || path.join(__dirname, 'dawam.db'));
-// Tunggu (bukan langsung gagal) kalau DB sedang dikunci proses lain, mis. skrip bantu.
-// Tidak mengubah format file DB (sengaja TIDAK mengaktifkan WAL).
-db.pragma('busy_timeout = 5000');
-
-// ========== HELPER TEKS (murni) ==========
-
-// Buang karakter kontrol & tanda yang bisa dipakai menyusupkan instruksi ke prompt, batasi panjang.
-function sanitasiTeksPendek(teks, maks = 60) {
-  return String(teks ?? '')
-    .replace(/[\u0000-\u001f\u007f]/g, ' ')
-    .replace(/["`{}<>]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, maks);
-}
-
-function jarakEdit(a, b) {
-  if (a === b) return 0;
-  if (!a.length) return b.length;
-  if (!b.length) return a.length;
-  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
-  for (let i = 1; i <= a.length; i++) {
-    const cur = [i];
-    for (let j = 1; j <= b.length; j++) {
-      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
-    }
-    prev = cur;
-  }
-  return prev[b.length];
-}
-
-// Kunci pencocokan nama surat: huruf kecil, tanpa apostrof/strip/spasi, tanpa awalan
-// "al/an/as/ar/ash/..." ("Baqarah" = "Al-Baqarah" = "al baqarah").
-const AWALAN_SURAT = ['ash', 'ath', 'adh', 'asy', 'ats', 'adz', 'al', 'an', 'as', 'ar', 'ad', 'at', 'az'];
-function kunciNamaSurat(nama) {
-  let k = String(nama || '')
-    .toLowerCase()
-    .replace(/\b(surat|surah|qs)\b/g, ' ')
-    .replace(/[^a-z]/g, '');
-  for (const a of AWALAN_SURAT) {
-    if (k.startsWith(a) && k.length - a.length >= 3) {
-      k = k.slice(a.length);
-      break;
-    }
-  }
-  return k;
-}
-
-// Ejaan umum yang berbeda dari penulisan di data (kunci input -> kunci data).
-const ALIAS_KUNCI_SURAT = {
-  nasr: 'nashr', kausar: 'kautsar', kautsar: 'kautsar', yaasin: 'yasin', yasiin: 'yasin', taha: 'thaha', thoha: 'thaha',
-  fusilat: 'fushshilat', fussilat: 'fushshilat', ghofir: 'ghafir', gafir: 'ghafir', ikhlash: 'ikhlas', ihlas: 'ikhlas',
-  insyirah: 'syarh', rahmaan: 'rahman', kahfi: 'kahf',
-};
-
-// Nama surat kanonik dari input bebas (typo/ejaan beda). null kalau tidak yakin -- termasuk kalau
-// dua surat sama-sama dekat (lebih baik bertanya ulang daripada diam-diam salah surat).
-function cocokkanNamaSurat(input, daftarKanonik) {
-  const kunciAsli = kunciNamaSurat(input);
-  if (kunciAsli.length < 3) return null;
-  const kunciInput = ALIAS_KUNCI_SURAT[kunciAsli] || kunciAsli;
-
-  let terbaik = null;
-  let jarakTerbaik = Infinity;
-  let seri = false;
-  for (const nama of daftarKanonik) {
-    const kunci = kunciNamaSurat(nama);
-    if (kunci === kunciInput) return nama;
-    const jarak = jarakEdit(kunci, kunciInput);
-    if (jarak < jarakTerbaik) {
-      jarakTerbaik = jarak;
-      terbaik = nama;
-      seri = false;
-    } else if (jarak === jarakTerbaik) {
-      seri = true;
-    }
-  }
-  const batas = kunciInput.length <= 3 ? 0 : kunciInput.length >= 8 ? 2 : 1;
-  return jarakTerbaik <= batas && !seri ? terbaik : null;
-}
+const db = new Database(path.join(__dirname, 'dawam.db'));
 
 // ========== TANGGAL (WIB) ==========
 // SEMUA tanggal "hari ini" di aplikasi WAJIB lewat helper ini, bukan
@@ -218,18 +137,6 @@ db.exec(`
 `);
 db.exec(`CREATE INDEX IF NOT EXISTS idx_log_bacaan_user_tgl ON log_bacaan_harian (user_jid, tanggal)`);
 
-// Masukan/permintaan dari user lewat chat (fitur baru, keluhan, hapus data, minta kontak admin).
-// Dicatat supaya janji "diteruskan ke tim" benar-benar punya jejak yang bisa dibaca admin.
-db.exec(`
-  CREATE TABLE IF NOT EXISTS masukan_user (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_jid TEXT NOT NULL,
-    jenis TEXT NOT NULL,
-    isi TEXT,
-    waktu TEXT DEFAULT CURRENT_TIMESTAMP
-  )
-`);
-
 db.exec(`
   CREATE TABLE IF NOT EXISTS feedback_berhenti (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -310,11 +217,6 @@ tambahKolomJikaBelumAda('users', 'tawaran_tilawah_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'tawaran_alkahfi_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'reminder_jumat_laki_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'bentuk_bacaan', "TEXT DEFAULT 'kartu'"); // 'kartu' | 'reminder'
-// Idempoten per hari: "nanti" berkali-kali di hari yang sama dihitung sekali.
-tambahKolomJikaBelumAda('users', 'tanggal_belum_baca', 'TEXT');
-// Kapan tawaran Al-Kahfi terakhir dikirim: state WAITING_KONFIRMASI_ALKAHFI jadi kedaluwarsa dan
-// tidak lagi menelan balasan "ya" milik tawaran tilawah yang lebih baru.
-tambahKolomJikaBelumAda('users', 'alkahfi_offer_at', 'TEXT');
 
 // Migrasi (idempotent): user yang cuma lapor manual tidak pernah dapat tanggal_mulai_baca
 // (dulu cuma diisi saat kirim kartu), sehingga hitungSisaProgressUser menganggap mereka
@@ -392,52 +294,10 @@ function pathIndoDariKode(kode) {
   return `images/terjemahan-${normalisasiKodeUntukFilename(kode)}.jpg`;
 }
 
-// Daftar nama surat kanonik (persis seperti di kolom surat_mulai/surat_selesai), di-cache karena
-// data bacaan statis. LIKE %x% sebelumnya salah cocok (An-Nas -> An-Nashr) atau gagal cocok
-// ("Al-Kahfi" vs "Al-Kahf", "Ali Imran" vs "Ali 'Imran").
-let cacheNamaSurat = null;
-function getDaftarNamaSurat() {
-  if (cacheNamaSurat && cacheNamaSurat.length > 0) return cacheNamaSurat;
-  const rows = db
-    .prepare(`SELECT surat_mulai AS s FROM bacaan UNION SELECT surat_selesai AS s FROM bacaan`)
-    .all();
-  cacheNamaSurat = rows.map((r) => r.s).filter(Boolean);
-  return cacheNamaSurat;
-}
-
-function resolveNamaSurat(input) {
-  if (!input) return null;
-  try {
-    return cocokkanNamaSurat(input, getDaftarNamaSurat());
-  } catch (err) {
-    console.error('❌ Gagal resolve nama surat:', err.message);
-    return null;
-  }
-}
-
 function cariBacaanBySuratLike(suratKeyword) {
-  const kanonik = resolveNamaSurat(suratKeyword);
-  if (kanonik) {
-    return db
-      .prepare('SELECT * FROM bacaan WHERE surat_mulai = ? OR surat_selesai = ? ORDER BY urutan ASC LIMIT 1')
-      .get(kanonik, kanonik);
-  }
-  // Fallback lama kalau nama tidak dikenali sama sekali.
   return db
     .prepare('SELECT * FROM bacaan WHERE surat_ayat LIKE ? ORDER BY urutan ASC LIMIT 1')
     .get(`%${suratKeyword}%`);
-}
-
-// Card Al-Kahfi dengan urutan tertentu (cicilan Jumat). Dulu dihitung di index.js memakai
-// variabel `db` yang tidak pernah di-import -> ReferenceError saat user membalas "ya".
-function getBacaanAlkahfiByUrutan(urutan) {
-  const kanonik = resolveNamaSurat('Al-Kahfi');
-  if (!kanonik) return null;
-  return (
-    db
-      .prepare('SELECT * FROM bacaan WHERE urutan = ? AND (surat_mulai = ? OR surat_selesai = ?)')
-      .get(urutan, kanonik, kanonik) || null
-  );
 }
 
 // Cari card yang MENGANDUNG ayat tertentu dari suatu surat -- dipakai lapor_bacaan_by_ayat.
@@ -447,27 +307,7 @@ function getBacaanAlkahfiByUrutan(urutan) {
 // 2. Kalau tidak ketemu rentang yang pas (misal ayat disebut user meleset dikit dari rentang
 //    yang terdata), fallback ke card dengan surat cocok yang ayat_mulai-nya PALING DEKAT
 //    (<=) ke ayat yang disebut -- supaya tetap dapat posisi yang masuk akal.
-function cariBacaanBySuratDanAyat(namaSuratInput, nomorAyatInput) {
-  // Dari LLM kadang string ("50"); perbandingan TEXT vs INTEGER di SQLite selalu salah.
-  const nomorAyat = Math.trunc(Number(nomorAyatInput));
-  if (!Number.isFinite(nomorAyat) || nomorAyat < 1) return null;
-
-  const kanonik = resolveNamaSurat(namaSuratInput);
-  if (kanonik) {
-    // Tolak ayat yang melebihi jumlah ayat surat itu (typo "Al-Baqarah 5000").
-    const maks = db
-      .prepare(`
-        SELECT MAX(a) AS m FROM (
-          SELECT ayat_selesai AS a FROM bacaan WHERE surat_selesai = ?
-          UNION ALL SELECT ayat_mulai AS a FROM bacaan WHERE surat_mulai = ?
-        )
-      `)
-      .get(kanonik, kanonik).m;
-    if (maks && nomorAyat > maks) return null;
-  }
-  // Nama kanonik dipakai persis (LIKE tanpa wildcard); kalau tak dikenali, pola longgar lama.
-  const pola = kanonik || `%${namaSuratInput}%`;
-
+function cariBacaanBySuratDanAyat(namaSurat, nomorAyat) {
   const kandidatTepat = db
     .prepare(`
       SELECT * FROM bacaan
@@ -479,7 +319,7 @@ function cariBacaanBySuratDanAyat(namaSuratInput, nomorAyatInput) {
       ORDER BY urutan ASC
       LIMIT 1
     `)
-    .get(pola, nomorAyat, nomorAyat, pola, nomorAyat);
+    .get(`%${namaSurat}%`, nomorAyat, nomorAyat, `%${namaSurat}%`, nomorAyat);
 
   if (kandidatTepat) return kandidatTepat;
 
@@ -492,7 +332,7 @@ function cariBacaanBySuratDanAyat(namaSuratInput, nomorAyatInput) {
       ORDER BY ayat_mulai DESC, urutan DESC
       LIMIT 1
     `)
-    .get(pola, nomorAyat);
+    .get(`%${namaSurat}%`, nomorAyat);
 
   return fallback || null;
 }
@@ -501,13 +341,6 @@ function cariBacaanBySuratDanAyat(namaSuratInput, nomorAyatInput) {
 // jumlah kartunya di skema baru, beda dari skema lama yang fixed 30/juz).
 function hitungJumlahKartuDalamJuz(juz) {
   return db.prepare('SELECT COUNT(*) as total FROM bacaan WHERE juz = ?').get(juz).total;
-}
-
-// Jumlah kartu semua juz dalam SATU query (sebelumnya 30 query terpisah).
-function getJumlahKartuPerJuz() {
-  const rows = db.prepare('SELECT juz, COUNT(*) AS jumlah FROM bacaan GROUP BY juz').all();
-  const peta = new Map(rows.map((r) => [r.juz, r.jumlah]));
-  return Array.from({ length: 30 }, (_, i) => ({ juz: i + 1, jumlah_kartu: peta.get(i + 1) || 0 }));
 }
 
 // ========== USERS ==========
@@ -527,14 +360,9 @@ function getUser(jid) {
   return getOrCreateUser(jid);
 }
 
-// Tanpa efek samping: orang asing yang kirim pesan tidak membuat baris users baru.
-function getUserIfExists(jid) {
-  return db.prepare('SELECT * FROM users WHERE jid = ?').get(jid) || null;
-}
-
 function isUserRegistered(jid) {
-  const user = getUserIfExists(jid);
-  return !!user && user.is_registered === 1;
+  const user = getOrCreateUser(jid);
+  return user.is_registered === 1;
 }
 
 function registerUser(jid) {
@@ -702,24 +530,6 @@ function isOnboardingLengkap(jid) {
   return getFieldOnboardingKosong(jid).length === 0;
 }
 
-// Normalisasi nilai dari LLM/user sebelum masuk DB. Nama/lokasi/motivasi dibersihkan karena
-// nanti disisipkan ke system prompt; gender dipetakan ke L/P.
-function bersihkanNilaiField(k, v) {
-  if (typeof v === 'string') {
-    if (k === 'name' || k === 'location' || k === 'mulai_surat') return sanitasiTeksPendek(v, 60);
-    if (k === 'motivasi_personal') return sanitasiTeksPendek(v, 300);
-    if (k === 'gender') {
-      const g = v.trim().toLowerCase();
-      if (['l', 'laki-laki', 'laki', 'pria', 'cowok', 'akhi', 'ikhwan'].includes(g)) return 'L';
-      if (['p', 'perempuan', 'wanita', 'cewek', 'ukhti', 'akhwat'].includes(g)) return 'P';
-      return v.trim().toUpperCase();
-    }
-    if (k === 'target_juz_per_hari') return v.trim();
-  }
-  if (k === 'target_juz_per_hari' && typeof v === 'number') return String(v);
-  return v;
-}
-
 function updateUserFields(jid, data) {
   getOrCreateUser(jid);
   const kolomValid = [
@@ -727,24 +537,18 @@ function updateUserFields(jid, data) {
     'reminder_sholat_aktif', 'tawaran_tilawah_aktif', 'tawaran_alkahfi_aktif',
     'reminder_jumat_laki_aktif', 'bentuk_bacaan',
   ];
-  const entries = Object.entries(data || {})
-    .map(([k, v]) => [k, bersihkanNilaiField(k, v)])
-    .filter(([k, v]) => {
-      if (!kolomValid.includes(k) || v === null || v === undefined || v === '') return false;
-      if (k === 'target_juz_per_hari' && !isTargetValid(v)) {
-        console.log(`⚠️  target_juz_per_hari="${v}" tidak valid, diabaikan.`);
-        return false;
-      }
-      if (k === 'bentuk_bacaan' && !['kartu', 'reminder'].includes(v)) {
-        console.log(`⚠️  bentuk_bacaan="${v}" tidak valid, diabaikan.`);
-        return false;
-      }
-      if (k === 'gender' && !['L', 'P', 'X'].includes(v)) {
-        console.log(`⚠️  gender="${v}" tidak valid, diabaikan.`);
-        return false;
-      }
-      return true;
-    });
+  const entries = Object.entries(data || {}).filter(([k, v]) => {
+    if (!kolomValid.includes(k) || v === null || v === undefined || v === '') return false;
+    if (k === 'target_juz_per_hari' && !isTargetValid(v)) {
+      console.log(`⚠️  target_juz_per_hari="${v}" tidak valid, diabaikan.`);
+      return false;
+    }
+    if (k === 'bentuk_bacaan' && !['kartu', 'reminder'].includes(v)) {
+      console.log(`⚠️  bentuk_bacaan="${v}" tidak valid, diabaikan.`);
+      return false;
+    }
+    return true;
+  });
   if (entries.length === 0) return;
 
   const setClause = entries.map(([k]) => `${k} = ?`).join(', ');
@@ -768,11 +572,6 @@ function pastikanTanggalMulaiBaca(jid, tanggalISOMulai = tanggalHariIniISO()) {
   }
 }
 
-// Satu halaman mushaf terdiri dari beberapa kartu (skema Mushaf Madinah 3 bagian: 1808 kartu
-// = 604 halaman). Angka yang DITAMPILKAN ke user ("halaman") harus halaman mushaf sungguhan,
-// sedangkan hitungan internal (log harian, target) tetap dalam kartu.
-const JUMLAH_HALAMAN_MUSHAF = 604;
-
 function totalKartuKeseluruhan() {
   return countBacaan(); // sekitar 1.808, dihitung dari data riil, bukan hardcode
 }
@@ -784,32 +583,11 @@ function rataKartuPerJuz() {
 
 // Ubah selisih halaman jadi deskripsi yang enak dibaca: halaman kalau kecil (<1 juz),
 // juz (bulat, tanpa desimal) kalau besar. Dipakai di sisi "display", basis hitung tetap halaman.
-function kartuPerHalaman() {
-  const total = totalKartuKeseluruhan();
-  return total > 0 ? total / JUMLAH_HALAMAN_MUSHAF : 1;
-}
-
-function kartuKeHalaman(kartu) {
-  return kartu / kartuPerHalaman();
-}
-
-// Laporan manual dari user dalam halaman -> kartu (minimal 1).
-function halamanKeKartu(halaman) {
-  return Math.max(1, Math.round(halaman * kartuPerHalaman()));
-}
-
-// 1 desimal kalau kecil (1.3), bulat kalau >= 10 (21), supaya enak dibaca di chat.
-function bulatkanHalaman(h) {
-  return h >= 10 ? Math.round(h) : Math.round(h * 10) / 10;
-}
-
-// Input dalam KARTU. Output: halaman mushaf kalau < 1 juz, juz (bulat) kalau lebih.
-function formatSelisihUntukTampilan(selisihKartuAbs) {
-  if (selisihKartuAbs < rataKartuPerJuz()) {
-    if (selisihKartuAbs === 0) return { satuan: 'halaman', nilai: 0 };
-    return { satuan: 'halaman', nilai: Math.max(1, Math.round(kartuKeHalaman(selisihKartuAbs))) };
+function formatSelisihUntukTampilan(selisihHalamanAbs) {
+  if (selisihHalamanAbs < rataKartuPerJuz()) {
+    return { satuan: 'halaman', nilai: Math.round(selisihHalamanAbs) };
   }
-  const juz = Math.round(selisihKartuAbs / rataKartuPerJuz());
+  const juz = Math.round(selisihHalamanAbs / rataKartuPerJuz());
   return { satuan: 'juz', nilai: juz };
 }
 
@@ -835,25 +613,6 @@ function sudahKhatamSetelahWrap(startBacaanId, idSebelumWrap, idSetelahWrap) {
   return idSetelahWrap >= startBacaanId;
 }
 
-// Khatam = jarak tempuh dari titik start menyentuh satu putaran penuh (total kartu). Dicek lewat
-// PERUBAHAN jarak (sebelum -> sesudah) pada satu pengiriman, jadi benar untuk user yang mulai dari
-// surat manapun dan untuk putaran ke-2 dst. (pemanggil me-reset start_bacaan_id ke posisi saat
-// khatam). sudahKhatamSetelahWrap di atas hanya benar untuk start_bacaan_id <= 1.
-function sudahKhatamSetelahKirim(startBacaanId, posisiSebelum, posisiSesudah) {
-  const total = totalKartuKeseluruhan();
-  if (!total || posisiSebelum === posisiSesudah) return false;
-  const jarakSebelum = hitungHalamanDitempuhDenganWrap(startBacaanId, posisiSebelum);
-  // Kembali tepat ke titik start berarti satu putaran penuh (bukan 0).
-  const jarakSesudah = posisiSesudah === startBacaanId ? total : hitungHalamanDitempuhDenganWrap(startBacaanId, posisiSesudah);
-  return jarakSebelum < total && jarakSesudah >= total;
-}
-
-// Target harian (kartu/hari) dari pilihan "1 juz per N hari". null kalau target tidak valid.
-function hitungTargetHarian(targetJuzPerHari) {
-  if (!isTargetValid(String(targetJuzPerHari))) return null;
-  return Math.round(rataKartuPerJuz() / Number(targetJuzPerHari));
-}
-
 // Basis perhitungan: JARAK YANG SUDAH DITEMPUH dari titik mulai (start_bacaan_id),
 // BUKAN posisi absolut di buku. User bisa mulai dari surat manapun (tidak selalu
 // Al-Fatihah) -- posisi tinggi tidak berarti progress besar kalau start-nya juga tinggi.
@@ -871,9 +630,9 @@ function hitungSisaProgressUser(jid) {
       ada_target: false,
       target_juz_per_hari: user.target_juz_per_hari || null,
       juz_sekarang: juzSekarang,
-      halaman_posisi_sekarang: bacaan?.halaman ?? 0,
-      halaman_ditempuh: bulatkanHalaman(kartuKeHalaman(halamanDitempuh)),
-      total_halaman_keseluruhan: JUMLAH_HALAMAN_MUSHAF,
+      halaman_posisi_sekarang: posisiSekarang,
+      halaman_ditempuh: halamanDitempuh,
+      total_halaman_keseluruhan: totalKartuKeseluruhan(),
       sudah_baca_hari_ini: user.tanggal_terakhir_baca === hariIniISOAwal,
       // null = memang tidak relevan dihitung (belum ada target/belum mulai), BUKAN 0%.
       // Konsumen (rekap) WAJIB tampilkan field ini -- null ditampilkan sebagai "-" bukan di-skip.
@@ -893,9 +652,9 @@ function hitungSisaProgressUser(jid) {
       ada_target: false,
       target_juz_per_hari: user.target_juz_per_hari,
       juz_sekarang: juzSekarang,
-      halaman_posisi_sekarang: bacaan?.halaman ?? 0,
-      halaman_ditempuh: bulatkanHalaman(kartuKeHalaman(halamanDitempuh)),
-      total_halaman_keseluruhan: JUMLAH_HALAMAN_MUSHAF,
+      halaman_posisi_sekarang: posisiSekarang,
+      halaman_ditempuh: halamanDitempuh,
+      total_halaman_keseluruhan: totalKartuKeseluruhan(),
     };
   }
 
@@ -926,15 +685,14 @@ function hitungSisaProgressUser(jid) {
     ada_target: true,
     target_juz_per_hari: user.target_juz_per_hari,
     juz_sekarang: juzSekarang,
-    halaman_posisi_sekarang: bacaan?.halaman ?? 0,
-    halaman_ditempuh: bulatkanHalaman(kartuKeHalaman(halamanDitempuh)),
+    halaman_posisi_sekarang: posisiSekarang,
+    halaman_ditempuh: halamanDitempuh,
     hari_berjalan: hariBerjalan,
-    // Semua field "halaman_*" di bawah SUDAH dalam halaman mushaf (bukan kartu).
-    halaman_target_hari_ini: bulatkanHalaman(kartuKeHalaman(halamanTarget)),
-    halaman_ditempuh_hari_ini: bulatkanHalaman(kartuKeHalaman(halamanDitempuhHariIni)),
-    total_halaman_keseluruhan: JUMLAH_HALAMAN_MUSHAF,
+    halaman_target_hari_ini: halamanTarget,
+    halaman_ditempuh_hari_ini: halamanDitempuhHariIni, // <-- tambahan
+    total_halaman_keseluruhan: totalKartuKeseluruhan(),
     status,
-    selisih_halaman: bulatkanHalaman(kartuKeHalaman(selisihHalaman)),
+    selisih_halaman: selisihHalaman,
     selisih_tampilan: `${status === 'SUDAH_CAPAI_PACE' ? 'lebih' : 'kurang'} ${tampilan.nilai} ${tampilan.satuan}`,
     persen_pace: persenPace,
     sudah_baca_hari_ini: sudahBacaHariIni,
@@ -948,9 +706,7 @@ function hitungSisaProgressUser(jid) {
 // jumlahKartu: default 1 (satu kartu terkirim). Lapor by-ayat mengisi selisih posisi
 // supaya lompatan beberapa halaman tidak cuma dihitung 1.
 function catatLogBacaanHarian(userJid, tanggalLog, bacaanId, suratAyat, statusPace, jumlahKartu = 1) {
-  // 0 diperbolehkan: laporan yang tidak memajukan posisi (ulang ayat sama) hanya memperbarui
-  // label tanpa menambah kredit target harian.
-  const tambah = Number.isInteger(jumlahKartu) && jumlahKartu >= 0 ? jumlahKartu : 1;
+  const tambah = Number.isInteger(jumlahKartu) && jumlahKartu > 0 ? jumlahKartu : 1;
   const existing = db
     .prepare('SELECT * FROM log_bacaan_harian WHERE user_jid = ? AND tanggal = ?')
     .get(userJid, tanggalLog);
@@ -968,58 +724,6 @@ function catatLogBacaanHarian(userJid, tanggalLog, bacaanId, suratAyat, statusPa
       WHERE user_jid = ? AND tanggal = ?
     `).run(bacaanId, suratAyat, tambah, statusPace || null, userJid, tanggalLog);
   }
-}
-
-// KOREKSI (bukan tambah): timpa posisi/label catatan di tanggal tertentu tanpa mengubah
-// jumlah_kartu yang ada. Kalau barisnya belum ada, dibuat dengan jumlah_kartu 1.
-function setLogBacaanHarian(userJid, tanggalLog, bacaanId, suratAyat) {
-  const existing = db
-    .prepare('SELECT id FROM log_bacaan_harian WHERE user_jid = ? AND tanggal = ?')
-    .get(userJid, tanggalLog);
-  if (!existing) {
-    db.prepare(`
-      INSERT INTO log_bacaan_harian (user_jid, tanggal, bacaan_id_awal, bacaan_id_akhir, surat_ayat_akhir, jumlah_kartu)
-      VALUES (?, ?, ?, ?, ?, 1)
-    `).run(userJid, tanggalLog, bacaanId, bacaanId, suratAyat);
-  } else {
-    db.prepare(`
-      UPDATE log_bacaan_harian SET bacaan_id_akhir = ?, surat_ayat_akhir = ? WHERE user_jid = ? AND tanggal = ?
-    `).run(bacaanId, suratAyat, userJid, tanggalLog);
-  }
-}
-
-// Rata-rata capaian target harian di rentang tanggal (inklusif): jumlah_kartu per hari vs target
-// harian user, tiap hari di-cap 100%, hari tanpa log = 0%. null kalau user tak punya target valid.
-// (status_pace_akhir tidak pernah terisi, jadi rekap mingguan lama sebenarnya cuma menampilkan
-// persen HARI INI.)
-function hitungPersenMingguan(jid, tanggalMulaiISO, tanggalSelesaiISO) {
-  const user = getUser(jid);
-  const target = hitungTargetHarian(user.target_juz_per_hari);
-  if (!target || target <= 0) return null;
-  const jumlahHari = selisihHariISO(tanggalMulaiISO, tanggalSelesaiISO) + 1;
-  if (jumlahHari <= 0) return null;
-  const logs = getLogBacaanHarianRange(jid, tanggalMulaiISO, tanggalSelesaiISO);
-  let total = 0;
-  for (const l of logs) total += Math.min(1, (l.jumlah_kartu || 0) / target);
-  return Math.round((total / jumlahHari) * 100);
-}
-
-// Idempoten per hari. Return true kalau counter benar-benar naik hari ini.
-function catatBelumBacaHariIni(jid, tanggal = tanggalHariIniISO()) {
-  const user = getOrCreateUser(jid);
-  if (user.tanggal_belum_baca === tanggal) return false;
-  db.prepare(
-    'UPDATE users SET consecutive_no_response = consecutive_no_response + 1, tanggal_belum_baca = ? WHERE jid = ?'
-  ).run(tanggal, jid);
-  return true;
-}
-
-function simpanMasukanUser(jid, jenis, isi) {
-  db.prepare('INSERT INTO masukan_user (user_jid, jenis, isi) VALUES (?, ?, ?)').run(
-    jid,
-    String(jenis || 'lainnya').slice(0, 40),
-    sanitasiTeksPendek(isi, 1000) || null
-  );
 }
 
 // Laporan manual (mode reminder-saja, tanpa kartu). Nambahin ke jumlah_kartu hari itu
@@ -1085,11 +789,6 @@ function getAnggotaDiBawahPaceHariIni(groupJid) {
 function updateLastSentAlkahfiId(jid, newId) {
   getOrCreateUser(jid);
   db.prepare('UPDATE users SET last_sent_alkahfi_id = ? WHERE jid = ?').run(newId, jid);
-}
-
-function setAlkahfiOfferAt(jid, waktuISO) {
-  getOrCreateUser(jid);
-  db.prepare('UPDATE users SET alkahfi_offer_at = ? WHERE jid = ?').run(waktuISO, jid);
 }
 
 function setTanggalTerakhirAlkahfi(jid, tanggalISO) {
@@ -1179,24 +878,21 @@ function catatAktivitasGroup(groupJid, userJid, jenis, catatan = null) {
 // bilang "belum mulai" untuk orang yang sebenarnya belum pernah kirim "dawam".
 function getRekapProgressGroup(groupJid) {
   const anggotaJids = getAnggotaGroup(groupJid);
-  return anggotaJids.flatMap((jid) => {
-    const user = getUserIfExists(jid);
+  return anggotaJids.map((jid) => {
+    const user = getUser(jid);
 
-    // User yang sudah berhenti (opt-out) tidak ikut direkap & tidak boleh di-tag publik.
-    if (user && user.is_registered === 1 && user.is_active === 0) return [];
-
-    if (!user || user.is_registered !== 1) {
-      return [{
-        nama: user?.name || null,
+    if (user.is_registered !== 1) {
+      return {
+        nama: user.name || null,
         jid,
         sudah_aktivasi_personal: false,
-      }];
+      };
     }
 
     const bacaan = getBacaanByUrutan(user.last_sent_bacaan_id);
     const sisaProgress = hitungSisaProgressUser(jid);
 
-    return [{
+    return {
       nama: user.name || 'Sahabat',
       jid,
       sudah_aktivasi_personal: true,
@@ -1210,7 +906,7 @@ function getRekapProgressGroup(groupJid) {
       halaman_ditempuh_hari_ini: sisaProgress.halaman_ditempuh_hari_ini ?? null, // <-- tambahan
       halaman_target_hari_ini: sisaProgress.halaman_target_hari_ini ?? null,     // <-- tambahan
       sudah_baca_hari_ini: sisaProgress.sudah_baca_hari_ini ?? false,
-    }];
+    };
   });
 }
 
@@ -1263,19 +959,10 @@ module.exports = {
   pathIndoDariKode,
   getBacaanByKode,
   hitungJumlahKartuDalamJuz,
-  getJumlahKartuPerJuz,
-  getBacaanAlkahfiByUrutan,
-  resolveNamaSurat,
-  kartuKeHalaman,
-  halamanKeKartu,
-  kartuPerHalaman,
-  bulatkanHalaman,
-  JUMLAH_HALAMAN_MUSHAF,
 
   // users - existing
   getOrCreateUser,
   getUser,
-  getUserIfExists,
   isUserRegistered,
   registerUser,
   setUserName,
@@ -1318,9 +1005,6 @@ module.exports = {
   hitungSisaProgressUser,
   hitungHalamanDitempuhDenganWrap,
   sudahKhatamSetelahWrap,
-  sudahKhatamSetelahKirim,
-  hitungTargetHarian,
-  hitungPersenMingguan,
 
   // groups - phase 3 (sosial)
   getOrCreateGroup,
@@ -1347,12 +1031,8 @@ module.exports = {
   getLogBacaanHarianRange,
   getAnggotaDiBawahPaceHariIni,
   catatLaporanBacaanManual,
-  setLogBacaanHarian,
-  catatBelumBacaHariIni,
-  simpanMasukanUser,
 
   // Jumat Al-Kahfi
   updateLastSentAlkahfiId,
   setTanggalTerakhirAlkahfi,
-  setAlkahfiOfferAt,
 };
