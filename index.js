@@ -4,24 +4,32 @@ process.env.TZ = process.env.TZ || 'Asia/Jakarta';
 
 require('dotenv').config();
 
+// Jaring pengaman terakhir: satu error yang lolos (misal sendMessage gagal di dalam cron atau
+// handler async) tidak boleh mematikan bot untuk SEMUA user. Cukup dicatat.
+process.on('unhandledRejection', (reason) => {
+  console.error('❌ unhandledRejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('❌ uncaughtException:', err);
+});
+
 const {
   default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
+  normalizeMessageContent,
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const cron = require('node-cron');
 const path = require('path');
 const {
   getUser,
+  getUserIfExists,
   setUserState,
-  getUserState,
   getAllUsers,
   getOrCreateUser,
   isUserRegistered,
   registerUser,
-  setUserName,
-  setUserLocation,
   getUserName,
   // phase 2
   getBacaanByUrutan,
@@ -30,32 +38,20 @@ const {
   pathArabDariKode,
   pathIndoDariKode,
   cariBacaanBySuratLike,
-  setUserGender,
-  setUserTarget,
-  setUserMotivasi,
-  setUserMulaiSurat,
   updateLastSentBacaanId,
   setTanggalMulaiBaca,
   setStartBacaanId,
   setTanggalTerakhirBaca,
-  sudahKhatamSetelahWrap,
+  sudahKhatamSetelahKirim,
   incrementNoResponse,
   resetNoResponse,
-  setModeArabSaja,
   setWaktuTawaranTerakhir,
-  setGroupSosialUser,
-  isUserActive,
-  nonaktifkanUser,
-  aktifkanKembaliUser,
   // onboarding conversational
   getFieldOnboardingKosong,
   updateUserFields,
   // phase 3 - groups (sosial)
-  getOrCreateGroup,
   getGroup,
-  isGroupAktif,
   aktifkanGroup,
-  setGroupState,
   setGroupWaktuMotivasiTerakhir,
   getAllGroupsAktif,
   tambahAnggotaGroup,
@@ -74,10 +70,12 @@ const {
   catatLogBacaanHarian,
   getLogBacaanHarianRange,
   getAnggotaDiBawahPaceHariIni,
+  hitungPersenMingguan,
   // Jumat Al-Kahfi
+  getBacaanAlkahfiByUrutan,
+  setAlkahfiOfferAt,
   updateLastSentAlkahfiId,
   setTanggalTerakhirAlkahfi,
-  OPSI_TARGET_VALID,
   // tanggal WIB
   tanggalHariIniISO,
   tanggalMundurISO,
@@ -94,11 +92,11 @@ const { buatPromptPersonal, buatPromptGrup } = require('./prompts');
 
 // ========== KONFIGURASI ==========
 
-const JEDA_TAWARAN_MS = 10 * 60 * 1000; // 1 menit (prototype)
+const JEDA_TAWARAN_MS = 10 * 60 * 1000; // tawaran tilawah dikirim 10 menit setelah reminder sholat
 const AMBANG_SILENT_JAM = 6; // silent user dianggap no-response setelah 6 jam (§7.3)
 const INTERVAL_CRON_SILENT = '0 */3 * * *'; // tiap 3 jam
 const INTERVAL_CRON_MOTIVASI_GROUP = '0 16 * * 5'; // tiap Jumat jam 16:00, rekap MINGGUAN ke grup aktif (bukan ajakan kosong lagi)
-const INTERVAL_CRON_REKAP_HARIAN = '0 20 * * *'; // tiap hari jam 20:00, rekap progress ke grup aktif
+ // tiap hari jam 20:00, rekap progress ke grup aktif
 const INTERVAL_CRON_LELANG_ISYA = '0 19 * * *'; // tiap hari jam 19:00 (bareng jadwal Isya), tawaran lelang card ke grup
 const INTERVAL_CRON_ALKAHFI_JUMAT = '0 5 * * 5'; // tiap Jumat jam 5 pagi, tawaran mulai cicilan Al-Kahfi
 
@@ -112,7 +110,6 @@ const JADWAL_SHOLAT = {
 
 let BOT_PN_NORMALIZED = null;  // nomor HP bot (format lama, @s.whatsapp.net)
 let BOT_LID_NORMALIZED = null; // LID bot (format baru, @lid) -- dipakai di mentionedJid grup
-
 
 // Tawaran lelang card yang lagi aktif per grup, direset tiap hari.
 // Struktur: { [groupJid]: { [userJid]: { nama, jid, diklaimOleh: null|jid } } }
@@ -130,22 +127,27 @@ function setTawaranLelangGrup(groupJid, daftarDiBawahPace) {
 function ambilTawaranLelangAktif(groupJid, namaTarget) {
   const tawaranGrup = tawaranLelangAktif[groupJid];
   if (!tawaranGrup) return null;
-  const namaLower = namaTarget.trim().toLowerCase();
-  const match = Object.values(tawaranGrup).find(
-    (t) => t.diklaimOleh === null && t.nama.toLowerCase().includes(namaLower)
+  const namaLower = String(namaTarget || '').trim().toLowerCase();
+  if (!namaLower) return null;
+  const tersedia = Object.values(tawaranGrup).filter((t) => t.diklaimOleh === null);
+  // Nama persis diutamakan; baru cocok sebagian (hindari "Ahmad" nyasar ke "Ahmad Fauzi").
+  return (
+    tersedia.find((t) => t.nama.toLowerCase() === namaLower) ||
+    tersedia.find((t) => t.nama.toLowerCase().includes(namaLower)) ||
+    null
   );
-  return match || null;
 }
 
-function tandaiTawaranSudahDiklaim(groupJid, userJid) {
+function tandaiTawaranSudahDiklaim(groupJid, userJid, pengklaimJid) {
   if (tawaranLelangAktif[groupJid]?.[userJid]) {
-    tawaranLelangAktif[groupJid][userJid].diklaimOleh = true;
+    tawaranLelangAktif[groupJid][userJid].diklaimOleh = pengklaimJid || true;
   }
 }
 
 function getRegisteredTargets() {
+  // User yang masih ONBOARDING belum punya nama/preferensi -- jangan dibanjiri reminder dulu.
   return getAllUsers()
-    .filter((u) => u.is_registered === 1 && u.is_active === 1)
+    .filter((u) => u.is_registered === 1 && u.is_active === 1 && u.state !== 'ONBOARDING')
     .map((u) => u.jid);
 }
 
@@ -159,34 +161,26 @@ const PESAN_REMINDER_SHOLAT = {
   isya: 'Assalamu\'alaikum 🌃\nWaktu Isya telah tiba. Tutup hari ini dengan shalat dan doa terbaik.',
 };
 
-const TEMPLATE_AUTO_REPORT = [
-  (nama, suratAyat) => `${nama} baru aja lanjut baca, sekarang nyampe ${suratAyat} 🤍`,
-  (nama, suratAyat) => `Gaskeun, ${nama} udah nyampe ${suratAyat} nih tilawahnya 📖`,
-  (nama, suratAyat) => `${nama} abis ngaji, posisi sekarang di ${suratAyat} ✨`,
-  (nama, suratAyat) => `Semangat terus, ${nama} baru aja baca sampe ${suratAyat} 🙌`,
-];
-
-function buatPesanAutoReport(nama, suratAyat) {
-  const pilih = TEMPLATE_AUTO_REPORT[Math.floor(Math.random() * TEMPLATE_AUTO_REPORT.length)];
-  return pilih(nama, suratAyat);
-}
-
 const PESAN_TAWARAN_NGAJI_TEMPLATE = (nama) =>
   `Semoga shalatnya diterima Allah ﷻ 🤲\n\n${nama}, sudah siap lanjut tilawah hari ini? Yuk sisihkan sedikit waktu untuk membaca Al-Qur'an 📖\n\nBalas *"ya"* untuk lanjut membaca, atau *"nanti"* kalau belum sempat.`;
 
 const CAPTION_KARTU_ARAB = (suratAyat) => suratAyat;
 const CAPTION_KARTU_TERJEMAH = (suratAyat) => `Terjemah: ${suratAyat}`;
 
-const PESAN_SETELAH_YA_ARAB_TEMPLATE = () =>
-  'Barakallahu fiik, semoga menjadi pemberat timbangan kebaikan 🤍';
+ // sudah tidak dipakai sebagai caption lagi
 
-const PESAN_SETELAH_YA_TERJEMAH_TEMPLATE = () => null; // sudah tidak dipakai sebagai caption lagi
-
-const PESAN_SETELAH_TIDAK =
-  'Tidak apa-apa, Sahabat 🤍 Semoga ada waktu lain untuk kembali dekat dengan Al-Qur\'an hari ini.\n\n"Sebaik-baik amalan adalah yang dilakukan secara rutin meskipun sedikit." (HR. Bukhari & Muslim)\n\nDawam akan selalu ada menemanimu, kapan pun kamu siap 🌙';
-
+// Dipakai untuk SEMUA kegagalan AI (timeout, rate limit, balasan kosong). Dulu menyuruh user
+// "balas ya atau nanti", padahal masalahnya di sisi Dawam.
 const PESAN_TIDAK_DIMENGERTI =
-  'Maaf, Dawam belum paham maksudnya 🙏 Balas dengan *"ya"* atau *"nanti"* ya, Sahabat.';
+  'Maaf, Dawam lagi agak gangguan nih 🙏 Coba kirim lagi pesanmu sebentar lagi ya, Sahabat.';
+
+// Kalau tool sudah berhasil jalan (misal kartu sudah terkirim) tapi AI gagal menulis balasan.
+const PESAN_SELESAI_TANPA_JAWABAN = 'Sudah Dawam proses ya, Sahabat 🤍';
+
+const PESAN_VN = 'Maaf ya, Dawam belum bisa dengerin pesan suara 🙏 Boleh diketik aja, Sahabat?';
+
+const PESAN_TANYA_MULAI_SURAT =
+  'Terakhir nih, mau mulai tilawah dari surat apa? Kalau mau dari awal (Al-Fatihah), bilang aja "dari awal" 😊';
 
 const PESAN_SELAMAT_DATANG =
   'Assalamu\'alaikum warahmatullahi wabarakatuh 🌙\n\nSelamat datang di *Dawam*, teman harianmu untuk istiqomah shalat dan tilawah Al-Qur\'an.\n\nMulai sekarang, Dawam akan mengingatkanmu di setiap waktu shalat dan menemanimu tilawah sedikit demi sedikit, tanpa beban.\n\n"Sebaik-baik amalan di sisi Allah adalah yang dikerjakan secara terus-menerus (dawam), walaupun sedikit." (HR. Bukhari & Muslim)\n\nBarakallahu fiik, Sahabat Dawam 🤍';
@@ -205,7 +199,7 @@ const PESAN_TANYA_MOTIVASI =
   'Kalau suatu saat kamu lagi males/berat buat baca Qur\'an, apa yang biasanya bisa bikin kamu semangat lagi? 😊';
 
 const PESAN_ONBOARDING_SELESAI_TEMPLATE = (nama, lokasi, target) =>
-  `Siap, ${nama}! Dawam sudah catat domisilimu di ${lokasi}, dengan target khatam 1 juz per ${target} hari 📍`;
+  `Siap, ${nama}! Dawam sudah catat ${lokasi && lokasi !== '-' ? `domisilimu di ${lokasi}, dengan ` : ''}target khatam 1 juz per ${target} hari 📍`;
 
 const PESAN_PERKENALAN_PERAN =
   'Sedikit cerita soal Dawam ya 🤍\n\nSetiap hari, aku bakal ingetin kamu pas waktu shalat tiba. Nggak lama-lama, cuma pengingat sederhana biar nggak kelewat.\n\nSelepas itu, aku juga bakal nanya apakah kamu mau lanjut tilawah sedikit. Nggak ada paksaan, kalau lagi sibuk atau belum sempat, bilang aja "nanti", aku nggak akan maksa 😊\n\nKalau kamu bilang mau, aku kirimin bacaan lanjutannya, dari halaman terakhir yang udah kamu baca. Pelan-pelan aja, yang penting konsisten.\n\nOh iya, kamu juga bisa nanya aku kapan aja kok. Soal progress bacaanmu, mau lanjut baca, atau sekadar cerita. Yuk kita mulai perjalanan ini bareng-bareng, semoga Allah mudahkan 🌙';
@@ -216,9 +210,164 @@ const KEYWORD_AKTIVASI = 'dawam';
 const PESAN_GROUP_SETUP_FALLBACK =
   'Assalamu\'alaikum 🌙 Dawam aktif di grup ini sebagai teman cerita progress tilawah dan saling menyemangati.\n\nBacaan Al-Qur\'an tetap dikirim personal ke chat pribadi masing-masing ya, biar nggak spam grup. Mau ngobrol sama Dawam di sini? Tinggal tag/mention atau reply pesan Dawam 😊';
 
+// ========== HELPER BARU (keamanan, antrean, parsing pesan) ==========
+
+// Samarkan JID untuk log (privasi): 628123456789@s.whatsapp.net -> ***6789
+function samarkanJid(jid) {
+  const id = String(jid || '').split('@')[0].split(':')[0];
+  return id.length > 4 ? `***${id.slice(-4)}` : '***';
+}
+
+// Teks tanpa tanda baca/emoji, huruf kecil, spasi dirapikan. Dipakai untuk mencocokkan keyword.
+function bersihkanUntukCocok(teks) {
+  return String(teks || '')
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Aktivasi personal toleran ("Dawam!", "halo dawam", "dawam dong"), tapi maksimal 3 kata supaya
+// kalimat panjang yang kebetulan memuat kata "dawam" tidak ikut mengaktifkan.
+function apakahKeywordAktivasiPersonal(teks) {
+  const kata = bersihkanUntukCocok(teks).split(' ').filter(Boolean);
+  return kata.length > 0 && kata.length <= 3 && kata.includes(KEYWORD_AKTIVASI);
+}
+
+// Jeda acak antar pengiriman massal: pola kirim yang terlalu rapi/cepat memicu penandaan spam.
+function jedaAcak(minMs, maksMs) {
+  return new Promise((resolve) => setTimeout(resolve, minMs + Math.random() * (maksMs - minMs)));
+}
+
+// ---- Antrean per chat: pesan dari chat yang sama diproses BERURUTAN ----
+// Tanpa ini dua pesan cepat dari satu user menjalankan dua agent paralel yang sama-sama membaca
+// posisi bacaan lama (kartu terkirim ganda / saling menimpa).
+const antrianPerChat = new Map();
+
+function jalankanBerurutan(kunci, tugas) {
+  const sebelumnya = antrianPerChat.get(kunci) || Promise.resolve();
+  const jalan = sebelumnya.then(() => tugas()).catch((err) => {
+    console.error(`❌ Error saat memproses pesan dari ${samarkanJid(kunci)}:`, err);
+  });
+  antrianPerChat.set(kunci, jalan);
+  jalan.then(() => {
+    if (antrianPerChat.get(kunci) === jalan) antrianPerChat.delete(kunci);
+  });
+  return jalan;
+}
+
+// ---- Dedupe ID pesan (Baileys bisa mengirim ulang pesan yang sama) ----
+const idPesanSudahDiproses = new Set();
+function sudahDiproses(id) {
+  if (!id) return false;
+  if (idPesanSudahDiproses.has(id)) return true;
+  idPesanSudahDiproses.add(id);
+  if (idPesanSudahDiproses.size > 2000) {
+    idPesanSudahDiproses.delete(idPesanSudahDiproses.values().next().value);
+  }
+  return false;
+}
+
+// Isi pesan yang sudah "dibuka" dari pembungkus (ephemeral, viewOnce, dll) + teks/caption-nya.
+// normalizeMessageContent dijaga: kalau versi Baileys tidak menyediakannya, pakai pesan apa adanya.
+function ambilIsiPesan(message) {
+  const konten =
+    (typeof normalizeMessageContent === 'function' ? normalizeMessageContent(message.message) : message.message) || {};
+  const teks = (
+    konten.conversation ||
+    konten.extendedTextMessage?.text ||
+    konten.imageMessage?.caption ||
+    konten.videoMessage?.caption ||
+    konten.documentMessage?.caption ||
+    ''
+  ).trim();
+  return { konten, teks, adaAudio: !!konten.audioMessage };
+}
+
+function ambilContextInfo(konten) {
+  for (const nilai of Object.values(konten || {})) {
+    if (nilai && typeof nilai === 'object' && nilai.contextInfo) return nilai.contextInfo;
+  }
+  return null;
+}
+
+async function tandaiDibaca(key) {
+  try {
+    await sock.readMessages([key]);
+  } catch {
+    /* tidak kritis */
+  }
+}
+
+async function setKetik(jid, aktif) {
+  try {
+    await sock.sendPresenceUpdate(aktif ? 'composing' : 'paused', jid);
+  } catch {
+    /* tidak kritis */
+  }
+}
+
+// Jalankan agent dengan indikator "sedang mengetik" supaya user tahu pesannya diproses.
+async function jalankanAgentDenganIndikator(jid, params) {
+  await setKetik(jid, true);
+  try {
+    return await jalankanAgentDawam(params);
+  } finally {
+    await setKetik(jid, false);
+  }
+}
+
+// Cache metadata grup (TTL pendek) supaya groupMetadata (rawan rate limit) tidak dipanggil di
+// setiap pesan yang di-tag.
+const cacheGrup = new Map(); // groupJid -> { data, at }
+const TTL_CACHE_GRUP_MS = 5 * 60 * 1000;
+
+async function ambilMetadataGrup(groupJid) {
+  const cache = cacheGrup.get(groupJid);
+  if (cache && Date.now() - cache.at < TTL_CACHE_GRUP_MS) return cache.data;
+  const data = await sock.groupMetadata(groupJid);
+  cacheGrup.set(groupJid, { data, at: Date.now() });
+  return data;
+}
+
+// Tawaran Al-Kahfi masih berlaku? Kedaluwarsa setelah 8 jam, atau kalah oleh tawaran tilawah yang
+// lebih baru (balasan "ya" lebih mungkin untuk tawaran tilawah itu).
+const BERLAKU_TAWARAN_ALKAHFI_MS = 8 * 60 * 60 * 1000;
+function alkahfiMasihBerlaku(user) {
+  if (!user.alkahfi_offer_at) return true; // data lama tanpa waktu: perilaku seperti dulu
+  if (Date.now() - new Date(user.alkahfi_offer_at).getTime() > BERLAKU_TAWARAN_ALKAHFI_MS) return false;
+  if (user.waktu_tawaran_terakhir && user.waktu_tawaran_terakhir > user.alkahfi_offer_at) return false;
+  return true;
+}
+
+// Jawaban target onboarding hanya diterima kalau pesan benar-benar memuat pilihan: satu angka, atau
+// kata tempo. Pertanyaan ("apa itu juz?"), jawaban kabur ("yang biasa aja"), dan dua angka
+// bertentangan ("3 eh 5 hari") ditolak -- AI sebelumnya menebak target dari pesan seperti itu.
+function pesanMemuatPilihanTarget(teks) {
+  const t = String(teks || '').toLowerCase();
+  const angka = new Set(t.match(/\d+/g) || []);
+  if (angka.size > 1) return false;
+  if (angka.size === 1) return true;
+  return /\b(santai|sedang|cepat|pelan|ngebut|seminggu|sehari)\b/.test(t);
+}
+
+// Nilai bawaan kalau user tidak kunjung menjawab satu pertanyaan onboarding (supaya tidak
+// terjebak selamanya). '-' artinya "tidak diisi" dan diabaikan oleh prompt (lihat groq.js).
+const DEFAULT_ONBOARDING = {
+  name: 'Sahabat',
+  location: '-',
+  gender: 'X',
+  target_juz_per_hari: '6',
+  motivasi_personal: '-',
+  mulai_surat: 'dari awal',
+};
+const MAKS_GAGAL_ONBOARDING = 4;
+const gagalOnboarding = new Map(); // jid -> jumlah giliran berturut-turut tanpa kemajuan
+
 // ========== BOT LOGIC ==========
 
 let sock;
+let percobaanReconnect = 0;
 
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_session');
@@ -227,10 +376,12 @@ async function startBot() {
     auth: state,
     printQRInTerminal: true,
   });
+  const soketIni = sock;
 
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', (update) => {
+    if (soketIni !== sock) return; // event dari socket lama yang sudah diganti
     const { connection, lastDisconnect, qr } = update;
 
     if (qr) {
@@ -239,11 +390,22 @@ async function startBot() {
     }
 
     if (connection === 'close') {
-      const shouldReconnect =
-        lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log('Koneksi terputus. Reconnect:', shouldReconnect);
-      if (shouldReconnect) startBot();
+      const kode = lastDisconnect?.error?.output?.statusCode;
+      const shouldReconnect = kode !== DisconnectReason.loggedOut;
+      console.log('Koneksi terputus (kode', kode ?? '?', '). Reconnect:', shouldReconnect);
+      if (!shouldReconnect) {
+        console.error('🚪 Sesi WhatsApp logout. Hapus folder auth_session lalu jalankan ulang untuk scan QR baru.');
+      } else {
+        // Backoff eksponensial (maks 30 detik) supaya error yang berulang tidak menjadi loop ketat.
+        // 515 (restartRequired) normal setelah scan QR -> sambung ulang segera.
+        const jeda = kode === DisconnectReason.restartRequired ? 500 : Math.min(30000, 1000 * 2 ** percobaanReconnect);
+        percobaanReconnect++;
+        setTimeout(() => {
+          startBot().catch((err) => console.error('❌ Gagal sambung ulang:', err));
+        }, jeda);
+      }
     } else if (connection === 'open') {
+      percobaanReconnect = 0;
       console.log('\n✅ Berhasil terkoneksi ke WhatsApp!\n');
       BOT_PN_NORMALIZED = sock.user?.id?.split(':')[0]?.split('@')[0] || null;
       BOT_LID_NORMALIZED = sock.user?.lid?.split(':')[0]?.split('@')[0] || null;
@@ -263,7 +425,6 @@ async function startBot() {
       setupScheduler();
       setupSilentUserChecker();
       setupGroupMotivasiScheduler();
-      //setupRekapHarianScheduler();
       setupLelangIsyaScheduler();
       setupAlkahfiJumatScheduler();
       setupReminderJumatLakiScheduler();
@@ -275,6 +436,7 @@ async function startBot() {
     console.log('🔥 event grup masuk:', JSON.stringify(update));
 
     const { id: groupJid, participants, action } = update;
+    cacheGrup.delete(groupJid); // anggota berubah -> cache metadata sudah basi
 
     const group = getGroup(groupJid);
     if (!group || group.is_aktif === 0) {
@@ -323,41 +485,43 @@ async function startBot() {
     }
   });
 
-  sock.ev.on('messages.upsert', async (m) => {
-    const message = m.messages[0];
-    if (!message.message || message.key.fromMe) return;
+  sock.ev.on('messages.upsert', (m) => {
+    // Hanya pesan BARU ('notify'); 'append' adalah sinkronisasi riwayat lama.
+    if (m.type !== 'notify') return;
 
-    const remoteJid = message.key.remoteJid;
-    const isGroup = remoteJid.endsWith('@g.us');
+    // Semua pesan dalam batch diproses (dulu hanya m.messages[0] -> sisanya hilang saat reconnect).
+    for (const message of m.messages || []) {
+      if (!message.message || message.key.fromMe) continue;
 
-    const text = (
-      message.message.conversation ||
-      message.message.extendedTextMessage?.text ||
-      ''
-    )
-      .trim()
-      .toLowerCase();
+      const remoteJid = message.key.remoteJid;
+      // Status WhatsApp, siaran, dan channel bukan chat personal -- jangan diproses.
+      if (!remoteJid || remoteJid.endsWith('@broadcast') || remoteJid.endsWith('@newsletter')) continue;
+      if (sudahDiproses(message.key.id)) continue;
 
-    if (isGroup) {
-      // Prioritaskan senderPn (biasanya sudah @s.whatsapp.net) supaya konsisten
-      // dengan JID yang dipakai di roster (normalizeParticipantJid) dan di chat personal.
-      const sender = message.key.senderPn || message.key.participant;
-      if (!sender) return; // tidak bisa identifikasi pengirim, abaikan
-      console.log(`\n📩 [GRUP ${remoteJid}] Pesan dari ${sender}: "${text}"`);
-      await handleIncomingGroupMessage(remoteJid, sender, text, message);
-    } else {
-      const sender = normalizeJid(message);
-      const textAsli = (
-        message.message.conversation ||
-        message.message.extendedTextMessage?.text ||
-        ''
-      ).trim();
-      console.log(`\n📩 Pesan masuk dari ${sender}: "${textAsli}"`);
-      await handleIncomingMessage(sender, textAsli, text);
+      jalankanBerurutan(remoteJid, () => prosesPesanMasuk(message));
     }
   });
 
   return sock;
+}
+
+async function prosesPesanMasuk(message) {
+  const remoteJid = message.key.remoteJid;
+  const isGroup = remoteJid.endsWith('@g.us');
+  const { konten, teks, adaAudio } = ambilIsiPesan(message);
+
+  if (isGroup) {
+    // Prioritaskan senderPn (biasanya sudah @s.whatsapp.net) supaya konsisten
+    // dengan JID yang dipakai di roster (normalizeParticipantJid) dan di chat personal.
+    const sender = message.key.senderPn || message.key.participant;
+    if (!sender) return; // tidak bisa identifikasi pengirim, abaikan
+    console.log(`\n📩 [GRUP ${samarkanJid(remoteJid)}] dari ${samarkanJid(sender)} (${teks.length} karakter)`);
+    await handleIncomingGroupMessage(remoteJid, sender, teks, konten, message.key);
+  } else {
+    const sender = normalizeJid(message);
+    console.log(`\n📩 Pesan masuk dari ${samarkanJid(sender)} (${teks.length} karakter)`);
+    await handleIncomingMessage(sender, teks, teks.toLowerCase(), { adaAudio, key: message.key });
+  }
 }
 
 // ========== NORMALISASI JID (existing, tidak berubah) ==========
@@ -395,7 +559,7 @@ async function resolveSenderJidViaGroupMetadata(groupJid, senderJid) {
   if (!senderJid.endsWith('@lid')) return senderJid; // sudah bentuk normal, tidak perlu resolve
 
   try {
-    const metadata = await sock.groupMetadata(groupJid);
+    const metadata = await ambilMetadataGrup(groupJid);
     const match = (metadata.participants || []).find((p) => p.id === senderJid);
     if (match?.phoneNumber && match.phoneNumber.endsWith('@s.whatsapp.net')) {
       return match.phoneNumber;
@@ -405,24 +569,6 @@ async function resolveSenderJidViaGroupMetadata(groupJid, senderJid) {
   }
 
   console.log(`⚠️  Tidak bisa resolve ${senderJid} ke @s.whatsapp.net lewat groupMetadata, dipakai apa adanya.`);
-  return senderJid;
-}
-
-// Kalau senderJid berupa @lid tapi versi @s.whatsapp.net-nya SUDAH ada di users
-// (match by nomor telepon yang sama persis setelah @lid di-resolve lewat sock),
-// pakai versi @s.whatsapp.net itu. Baileys biasanya expose pasangan ini lewat
-// sock.signalRepository atau message.key.senderPn saat pesan masuk -- tapi di titik
-// ini kita cuma punya senderJid mentah, jadi pendekatan paling aman: cek apakah JID
-// ini sudah match seseorang yang terdaftar via LID-mapping bawaan Baileys.
-function normalisasiSenderUntukGrup(senderJid) {
-  if (!senderJid.endsWith('@lid')) return senderJid; // sudah bentuk normal
-  try {
-    const mapped = sock.signalRepository?.lidMapping?.getPNForLID?.(senderJid);
-    if (mapped) return mapped;
-  } catch (err) {
-    console.error('❌ Gagal resolve LID ke PN:', err.message);
-  }
-  console.log(`⚠️  Tidak bisa resolve ${senderJid} ke @s.whatsapp.net, dipakai apa adanya.`);
   return senderJid;
 }
 
@@ -438,8 +584,8 @@ function apakahJidBot(jid) {
   );
 }
 
-function apakahBotDitag(message) {
-  const contextInfo = message.message?.extendedTextMessage?.contextInfo;
+function apakahBotDitag(konten) {
+  const contextInfo = ambilContextInfo(konten);
   if (!contextInfo) return false;
 
   const mentionedJids = contextInfo.mentionedJid || [];
@@ -463,10 +609,10 @@ async function kirimPesan(jid, text, jedaMsSebelum = 0) {
 
 // ========== HANDLER PESAN PERSONAL ==========
 
-async function handleIncomingMessage(jid, textAsli, textLower) {
+async function handleIncomingMessage(jid, textAsli, textLower, meta = {}) {
   // Cek dulu: apakah user belum terdaftar dan ngirim keyword aktivasi?
   if (!isUserRegistered(jid)) {
-    if (textLower === KEYWORD_AKTIVASI) {
+    if (apakahKeywordAktivasiPersonal(textLower)) {
       registerUser(jid);
       setUserState(jid, 'ONBOARDING');
 
@@ -482,13 +628,22 @@ async function handleIncomingMessage(jid, textAsli, textLower) {
       await kirimPesan(jid, PESAN_PEMBUKA_ONBOARDING, 1500);
       console.log(`✅ User baru teraktivasi: ${jid}, mulai onboarding...`);
     } else {
-      console.log(`(User belum terdaftar, bukan keyword aktivasi, diabaikan: "${textLower}")`);
+      console.log('(User belum terdaftar, bukan keyword aktivasi, diabaikan.)');
     }
     return;
   }
 
   const user = getUser(jid);
-  const state = user.state;
+  let state = user.state;
+
+  // State lama yang handler-nya sudah dihapus (flow lama): lepas supaya user tidak tersangkut
+  // dan prompt tidak lagi menganggap "user baru ditanya X" selamanya.
+  if (['WAITING_CONFIRM', 'WAITING_CONFIRM_TERJEMAH', 'WAITING_LANJUT_SESI'].includes(state)) {
+    console.log(`(State lama ${state} untuk ${samarkanJid(jid)} dilepas ke IDLE.)`);
+    setUserState(jid, 'IDLE');
+    user.state = 'IDLE';
+    state = 'IDLE';
+  }
 
   if (user.is_active === 0) {
     console.log(`(User ${jid} berstatus nonaktif, tetap diteruskan ke agent supaya bisa reaktivasi natural.)`);
@@ -510,30 +665,52 @@ async function handleIncomingMessage(jid, textAsli, textLower) {
 
     // ONBOARDING tetap state machine terpisah, tidak lewat agent.
   if (state === 'ONBOARDING') {
+    if (!textAsli) return; // gambar/stiker tanpa teks
     await handleOnboardingTurn(jid, textAsli);
     return;
   }
 
     // Jumat Al-Kahfi: state machine sederhana terpisah dari agent, mirip ONBOARDING.
   if (state === 'WAITING_KONFIRMASI_ALKAHFI') {
-    const intent = await groqAI.parseIntentJawaban(textAsli);
-    if (intent === 'YA') {
-      await kirimCardAlkahfiLanjutan(jid);
-    }
+    // Lepas state DULU: apa pun yang terjadi, user tidak boleh tersangkut di sini.
     setUserState(jid, 'IDLE');
+    user.state = 'IDLE';
+    state = 'IDLE';
+
+    // Hanya tangani kalau tawarannya masih berlaku (belum kedaluwarsa & tidak kalah oleh tawaran
+    // tilawah yang lebih baru). Balasan selain ya/nanti DITERUSKAN ke agent, tidak lagi ditelan.
+    if (textAsli && alkahfiMasihBerlaku(user)) {
+      const intent = await groqAI.parseIntentJawaban(textAsli);
+      if (intent === 'YA') {
+        const hasil = await kirimCardAlkahfiLanjutan(jid);
+        if (!hasil.sukses) {
+          await sock.sendMessage(jid, { text: 'Maaf, kartu Al-Kahfi-nya belum bisa terkirim sekarang 🙏 Coba lagi sebentar lagi ya, Sahabat.' });
+        }
+        return;
+      }
+      if (intent === 'TIDAK') {
+        const ack = 'Siap, Sahabat 🤍 Al-Kahfi bisa dicicil kapan pun kamu sempat, Jumat depan Dawam ingatkan lagi.';
+        simpanChatHistory(jid, 'user', textAsli);
+        await sock.sendMessage(jid, { text: ack });
+        simpanChatHistory(jid, 'assistant', ack);
+        return;
+      }
+    }
+    // selain itu: lanjut ke alur normal (agent) di bawah
+  }
+
+  if (!textAsli) {
+    // Tanpa teks: voice note dibalas sopan, jenis lain (gambar tanpa caption, stiker) diabaikan.
+    // (Dulu pesan 1 karakter seperti "5" juga ikut dibuang di sini.)
+    if (meta.adaAudio) await sock.sendMessage(jid, { text: PESAN_VN });
     return;
   }
 
-  if (state === 'WAITING_LANJUT_SESI') {
-    await handleJawabanLanjutSesi(jid, textAsli);
-    return;
-  }
+  if (meta.key) await tandaiDibaca(meta.key);
 
-  if (!textAsli || textAsli.length < 2) {
-    console.log('(Pesan terlalu pendek/kosong, diabaikan)');
-    return;
-  }
-
+  // Ambil riwayat SEBELUM menyimpan pesan baru: agent menambahkan pesan baru sendiri di akhir,
+  // jadi kalau disimpan dulu pesan itu muncul dobel di prompt.
+  const historiChat = getChatHistory(jid, 12);
   simpanChatHistory(jid, 'user', textAsli);
 
   const konteks = {
@@ -551,18 +728,22 @@ async function handleIncomingMessage(jid, textAsli, textLower) {
     },
   };
 
-  const hasil = await jalankanAgentDawam({
+  const hasil = await jalankanAgentDenganIndikator(jid, {
     systemPrompt: buatPromptPersonal(user),
     tools: TOOLS_PERSONAL,
-    historiChat: getChatHistory(jid, 12),
+    historiChat,
     pesanBaru: textAsli,
     eksekutorTools: EKSEKUTOR_PERSONAL,
     konteks,
   });
 
+  // Konteks "baru ditanya alasan belum tilawah" cukup berlaku untuk SATU balasan user.
+  if (state === 'WAITING_ALASAN_TIDAK_BACA') setUserState(jid, 'IDLE');
+
   if (hasil.error || !hasil.jawabanFinal) {
-    console.log(`⚠️  Agent gagal/kosong untuk ${jid}: ${hasil.error}`);
-    await sock.sendMessage(jid, { text: PESAN_TIDAK_DIMENGERTI });
+    console.log(`⚠️  Agent gagal/kosong untuk ${samarkanJid(jid)}: ${hasil.error} (tool sukses: ${hasil.toolSukses.join(',') || '-'})`);
+    // Kalau tool sudah berhasil (misal kartu terkirim), jangan kirim pesan error yang menyesatkan.
+    await sock.sendMessage(jid, { text: hasil.toolSukses.length > 0 ? PESAN_SELESAI_TANPA_JAWABAN : PESAN_TIDAK_DIMENGERTI });
     return;
   }
 
@@ -574,13 +755,34 @@ async function handleIncomingMessage(jid, textAsli, textLower) {
 async function handleOnboardingTurn(jid, text) {
   const fieldKosongSebelum = getFieldOnboardingKosong(jid);
 
-  const extracted = await groqAI.extractDataOnboarding(text, fieldKosongSebelum);
+  const extracted = (await groqAI.extractDataOnboarding(text, fieldKosongSebelum)) || {};
+  // AI sebelumnya menebak target dari pesan yang bukan jawaban ("hah apa tuh juz?" -> 6 hari).
+  if (extracted.target_juz_per_hari != null && !pesanMemuatPilihanTarget(text)) {
+    extracted.target_juz_per_hari = null;
+  }
   updateUserFields(jid, extracted);
 
-  const fieldBaruTerisi = Object.keys(extracted).filter(
-    (k) => extracted[k] !== null && extracted[k] !== undefined && fieldKosongSebelum.includes(k)
-  );
-  const fieldKosongSesudah = getFieldOnboardingKosong(jid);
+  let fieldKosongSesudah = getFieldOnboardingKosong(jid);
+  // Dihitung dari perubahan nyata di DB (bukan dari output mentah AI): nilai yang ditolak
+  // validasi tidak dianggap terisi.
+  const fieldBaruTerisi = fieldKosongSebelum.filter((f) => !fieldKosongSesudah.includes(f));
+
+  if (fieldBaruTerisi.length > 0) {
+    gagalOnboarding.delete(jid);
+  } else if (fieldKosongSesudah.length > 0 && !text.includes('?')) {
+    // Tidak ada kemajuan. Setelah beberapa giliran berturut-turut, isi pertanyaan yang macet dengan
+    // nilai bawaan supaya user tidak terjebak di onboarding selamanya. Pertanyaan balik user
+    // ("apa itu juz?") TIDAK dihitung gagal: itu klarifikasi yang sah, bukan jawaban yang macet.
+    const gagal = (gagalOnboarding.get(jid) || 0) + 1;
+    gagalOnboarding.set(jid, gagal);
+    if (gagal >= MAKS_GAGAL_ONBOARDING) {
+      const macet = fieldKosongSesudah[0];
+      updateUserFields(jid, { [macet]: DEFAULT_ONBOARDING[macet] });
+      gagalOnboarding.delete(jid);
+      console.log(`(Onboarding ${samarkanJid(jid)}: "${macet}" dilewati dengan nilai bawaan setelah ${gagal}x tidak terjawab.)`);
+      fieldKosongSesudah = getFieldOnboardingKosong(jid);
+    }
+  }
 
   if (fieldKosongSesudah.length === 0) {
     const namaFinal = getUserName(jid) || 'Sahabat Dawam';
@@ -613,7 +815,8 @@ async function handleOnboardingTurn(jid, text) {
     getUserName(jid),
     fieldBaruTerisi,
     fieldKosongSesudah,
-    text
+    text,
+    getUser(jid).target_juz_per_hari
   );
 
   if (pesan) {
@@ -625,6 +828,7 @@ async function handleOnboardingTurn(jid, text) {
       gender: PESAN_TANYA_GENDER,
       target_juz_per_hari: PESAN_TANYA_TARGET,
       motivasi_personal: PESAN_TANYA_MOTIVASI,
+      mulai_surat: PESAN_TANYA_MULAI_SURAT,
     };
     await sock.sendMessage(jid, {
       text: fallbackMap[fieldKosongSesudah[0]] || PESAN_TIDAK_DIMENGERTI,
@@ -649,226 +853,12 @@ async function selesaikanOnboarding(jid, nama, lokasi, target) {
   console.log(`✅ Onboarding selesai untuk ${jid}.`);
 }
 
-// ---- Sub-handler: WAITING_CONFIRM (tawaran ngaji awal) ----
-async function handleJawabanTawaranNgaji(jid, text) {
-  const nama = getUserName(jid) || 'Sahabat Dawam';
-  const intent = await groqAI.parseIntentJawaban(text);
-  console.log(`(Intent tawaran ngaji: ${intent})`);
-
-  if (intent === 'YA') {
-    const responYa = await groqAI.generateResponYa(nama);
-    if (responYa) await sock.sendMessage(jid, { text: responYa });
-    resetNoResponse(jid);
-    await tunggu(1500);
-    await kirimBacaanArab(jid);
-  } else if (intent === 'TIDAK') {
-    incrementNoResponse(jid);
-    let pesan = await groqAI.generateResponTidak(nama);
-    if (!pesan) pesan = PESAN_SETELAH_TIDAK;
-    await sock.sendMessage(jid, { text: pesan });
-    setUserState(jid, 'IDLE');
-    await cekDanKirimPesan3xJikaPerlu(jid);
-  } else {
-    // TIDAK_JELAS: bukan jawaban ya/nanti. Lepas state WAITING_CONFIRM,
-    // lempar ke agent supaya pesan user (misal tanya progress) beneran dijawab
-    // pakai tool, bukan cuma fallback chat generik.
-    setUserState(jid, 'IDLE');
-
-    simpanChatHistory(jid, 'user', text);
-    const user = getUser(jid);
-    const konteks = {
-      jid,
-      kirimBacaanLanjutan: () => kirimBacaanLanjutanUntukAgent(jid),
-      kirimTerjemahBacaan: () => kirimTerjemahBacaanUntukAgent(jid),
-      kirimKeGrup: async (targetGroupJid, teksKirim) => {
-        try {
-          await sock.sendMessage(targetGroupJid, { text: teksKirim });
-          return true;
-        } catch (err) {
-          console.error('❌ Gagal kirim ke grup (broadcast):', err.message);
-          return false;
-        }
-      },
-    };
-
-    const hasil = await jalankanAgentDawam({
-      systemPrompt: buatPromptPersonal(user),
-      tools: TOOLS_PERSONAL,
-      historiChat: getChatHistory(jid, 12),
-      pesanBaru: text,
-      eksekutorTools: EKSEKUTOR_PERSONAL,
-      konteks,
-    });
-
-    if (hasil.error || !hasil.jawabanFinal) {
-      await sock.sendMessage(jid, { text: PESAN_TIDAK_DIMENGERTI });
-      return;
-    }
-
-    await sock.sendMessage(jid, { text: hasil.jawabanFinal });
-    simpanChatHistory(jid, 'assistant', hasil.jawabanFinal);
-  }
-}
-
-// ---- Sub-handler: WAITING_CONFIRM_TERJEMAH (§5) ----
-async function handleJawabanTawaranTerjemah(jid, text) {
-  const nama = getUserName(jid) || 'Sahabat Dawam';
-  const intent = await groqAI.parseIntentJawaban(text);
-  console.log(`(Intent tawaran terjemah: ${intent})`);
-
-  if (intent === 'YA') {
-    const user = getUser(jid);
-    const bacaan = getBacaanByUrutan(user.last_sent_bacaan_id);
-    if (bacaan) {
-      try {
-        await sock.sendMessage(jid, {
-          image: { url: path.join(__dirname, bacaan.path_indo) },
-          caption: PESAN_SETELAH_YA_TERJEMAH_TEMPLATE(bacaan.surat_ayat),
-        });
-        console.log(`✅ Terjemah terkirim ke ${jid}: ${bacaan.surat_ayat}`);
-      } catch (err) {
-        console.error('❌ Gagal kirim terjemah:', err.message);
-      }
-    }
-    await cekKecepatanDanTawarkanLanjut(jid);
-  } else if (intent === 'TIDAK') {
-    await cekKecepatanDanTawarkanLanjut(jid);
-  } else {
-    let pesan = await groqAI.generateFallbackChat(nama, text);
-    if (!pesan) pesan = PESAN_TIDAK_DIMENGERTI;
-    await sock.sendMessage(jid, { text: pesan });
-  }
-}
-
-// ---- Sub-handler: WAITING_LANJUT_SESI (§4.3) ----
-async function handleJawabanLanjutSesi(jid, text) {
-  const nama = getUserName(jid) || 'Sahabat Dawam';
-  const intent = await groqAI.parseIntentJawaban(text);
-  console.log(`(Intent lanjut sesi: ${intent})`);
-
-  if (intent === 'YA') {
-    await kirimBacaanArab(jid);
-  } else if (intent === 'TIDAK') {
-    const user = getUser(jid);
-    const sisa = hitungSisaProgressUser(jid);
-
-    if (sisa.ada_target && (sisa.status === 'SUDAH_CAPAI_PACE' || sisa.status === 'PAS_PACE')) {
-      // Sudah capai target, user milih cukup -- ini capaian, bukan kurang, jadi JANGAN
-      // pakai generateIngatkanTargetAsli (itu buat yang masih kurang dari target).
-      let pesan = await groqAI.generatePenutupSesiBiasa(nama);
-      if (!pesan) pesan = `Mantap, ${nama}! Udah 100% target hari ini, istirahat dulu gapapa 🤍 Sampai jumpa di waktu sholat berikutnya.`;
-      await sock.sendMessage(jid, { text: pesan });
-    } else {
-      let pesan = await groqAI.generateIngatkanTargetAsli(nama, user.target_juz_per_hari);
-      if (pesan) await sock.sendMessage(jid, { text: pesan });
-    }
-    setUserState(jid, 'IDLE');
-  } else {
-    let pesan = await groqAI.generateFallbackChat(nama, text);
-    if (!pesan) pesan = PESAN_TIDAK_DIMENGERTI;
-    await sock.sendMessage(jid, { text: pesan });
-  }
-}
-
 // ========== LOGIC PENGIRIMAN BACAAN -- SELALU PERSONAL (§4) ==========
 // PENTING: fungsi-fungsi ini HANYA pernah dipanggil dengan jid personal (@s.whatsapp.net),
 // TIDAK PERNAH dengan jid grup. Bacaan tidak pernah dikirim ke grup.
 
-async function kirimBacaanArab(jid) {
-  const user = getUser(jid);
-
-  if (user.mode_baca_arab_saja === 0) {
-    return kirimBacaanTerjemahSaja(jid);
-  }
-
-  const urutanMin = getUrutanMin();
-  const urutanMax = getUrutanMax();
-  const urutanSebelumWrap = (user.last_sent_bacaan_id || 0) + 1;
-  let nextUrutan = urutanSebelumWrap;
-  if (nextUrutan > urutanMax) {
-    nextUrutan = urutanMin;
-  }
-
-  const startBacaanId = user.start_bacaan_id || 0;
-  if (sudahKhatamSetelahWrap(startBacaanId, urutanSebelumWrap, nextUrutan)) {
-    setStartBacaanId(jid, nextUrutan - 1 < urutanMin ? urutanMax : nextUrutan - 1);
-  }
-
-  const bacaan = getBacaanByUrutan(nextUrutan);
-  if (!bacaan) {
-    await sock.sendMessage(jid, { text: 'Maaf, data bacaan belum tersedia saat ini 🙏' });
-    console.log(`⚠️  Bacaan urutan=${nextUrutan} tidak ditemukan di database (seed belum lengkap?).`);
-    return;
-  }
-
-  try {
-    await sock.sendMessage(jid, {
-      image: { url: path.join(__dirname, pathArabDariKode(bacaan.kode)) },
-      caption: CAPTION_KARTU_ARAB(bacaan.surat_ayat),
-    });
-    await tunggu(800);
-    await sock.sendMessage(jid, { text: PESAN_SETELAH_YA_ARAB_TEMPLATE() });
-  } catch (err) {
-    console.error('❌ Gagal kirim bacaan Arab:', err.message);
-    return;
-  }
-
-  const hariIniWIB = tanggalHariIniISO();
-  if (!user.tanggal_mulai_baca) {
-    setTanggalMulaiBaca(jid, hariIniWIB);
-  }
-
-  updateLastSentBacaanId(jid, nextUrutan);
-  setTanggalTerakhirBaca(jid, hariIniWIB);
-  catatLogBacaanHarian(jid, hariIniWIB, nextUrutan, bacaan.surat_ayat, null);
-  setUserState(jid, 'IDLE');
-  console.log(`✅ Bacaan Arab terkirim ke ${jid}: ${bacaan.surat_ayat} (kode=${bacaan.kode}, urutan=${nextUrutan})`);
-}
-
-async function kirimBacaanTerjemahSaja(jid) {
-  const user = getUser(jid);
-
-  const urutanMin = getUrutanMin();
-  const urutanMax = getUrutanMax();
-  let nextUrutan = (user.last_sent_bacaan_id || 0) + 1;
-  if (nextUrutan > urutanMax) {
-    nextUrutan = urutanMin;
-  }
-
-  const bacaan = getBacaanByUrutan(nextUrutan);
-  if (!bacaan) {
-    await sock.sendMessage(jid, { text: 'Maaf, data bacaan belum tersedia saat ini 🙏' });
-    console.log(`⚠️  Bacaan urutan=${nextUrutan} tidak ditemukan (mode terjemah-saja).`);
-    return;
-  }
-
-  try {
-    await sock.sendMessage(jid, {
-      image: { url: path.join(__dirname, pathIndoDariKode(bacaan.kode)) },
-      caption: CAPTION_KARTU_TERJEMAH(bacaan.surat_ayat),
-    });
-  } catch (err) {
-    console.error('❌ Gagal kirim bacaan terjemah-saja:', err.message);
-    return;
-  }
-
-  const hariIniWIB = tanggalHariIniISO();
-  if (!user.tanggal_mulai_baca) {
-    setTanggalMulaiBaca(jid, hariIniWIB);
-  }
-
-  updateLastSentBacaanId(jid, nextUrutan);
-  setTanggalTerakhirBaca(jid, hariIniWIB);
-  catatLogBacaanHarian(jid, hariIniWIB, nextUrutan, bacaan.surat_ayat, null);
-  console.log(`✅ Terjemah-saja terkirim ke ${jid}: ${bacaan.surat_ayat} (kode=${bacaan.kode}, urutan=${nextUrutan})`);
-
-  await cekKecepatanDanTawarkanLanjut(jid);
-}
-
 // ========== FUNGSI UNTUK AGENT (dipanggil tools.js lewat konteks) ==========
-// Sengaja independen dari kirimBacaanArab/kirimBacaanTerjemahSaja di atas
-// (yang masih dipakai flow state lama) supaya tidak saling pengaruh selama migrasi bertahap.
-// Akan di-cleanup/di-dedup di Step 10 setelah flow lama resmi dibuang.
+// Satu-satunya jalur pengiriman bacaan (flow state lama sudah dihapus).
 
 async function kirimGambarBacaanMentah(jid, bacaan, jenis) {
   const relPath = jenis === 'arab' ? pathArabDariKode(bacaan.kode) : pathIndoDariKode(bacaan.kode);
@@ -969,9 +959,10 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
       break;
     }
 
-    const barusanKhatam = sudahKhatamSetelahWrap(startBacaanId, urutanSebelumWrap, nextUrutan);
-    if (barusanKhatam) {
-      startBacaanId = nextUrutan - 1 < urutanMin ? urutanMax : nextUrutan - 1;
+    // Khatam = satu putaran penuh dari titik start (benar untuk start dari surat manapun dan putaran
+    // ke-2 dst). Setelah khatam, putaran berikutnya dihitung dari posisi ini.
+    if (sudahKhatamSetelahKirim(startBacaanId, urutanSekarang, nextUrutan)) {
+      startBacaanId = nextUrutan;
       setStartBacaanId(jid, startBacaanId);
       barusanKhatamSekaliSaja = true;
     }
@@ -1075,74 +1066,16 @@ async function kirimTawaranLelangKeGrup(groupJid) {
 
   // Tetap siapkan data lelang di belakang layar (biar klaim_card_kawan tetap bisa jalan),
   // TAPI teks pengumuman lelang ke grup dihilangkan dulu.
-  if (diBawahPace.length > 0) {
-    setTawaranLelangGrup(groupJid, diBawahPace);
-  }
+  // SELALU di-reset tiap hari (termasuk kalau hari ini tidak ada yang di bawah pace), supaya
+  // tawaran kemarin tidak bisa diklaim hari ini.
+  setTawaranLelangGrup(groupJid, diBawahPace);
 
   // Yang dikirim ke grup sekarang laporan harian (persen + kurang berapa halaman),
   // pindah dari jam 20:00 ke jam Isya.
   await kirimRekapHarianKeGrup(groupJid, false, true);
 }
 
-// ---- §4.3: Deteksi kecepatan & tawaran lanjut ----
-async function cekKecepatanDanTawarkanLanjut(jid) {
-  const user = getUser(jid);
-  const nama = getUserName(jid) || 'Sahabat Dawam';
-
-  const sisa = hitungSisaProgressUser(jid);
-  if (!sisa.ada_target) {
-    await tutupSesiBaca(jid, nama);
-    setUserState(jid, 'IDLE');
-    return;
-  }
-
-  if (sisa.status === 'DI_BAWAH_PACE') {
-    let pesan = await groqAI.generateTawaranLanjutSesi(nama, user.target_juz_per_hari);
-    if (!pesan) {
-      pesan = `Mantap, ${nama}! Mau lanjut baca lagi sekarang biar makin dekat ke target ${user.target_juz_per_hari} hari/juz, atau cukup dulu?`;
-    }
-    await sock.sendMessage(jid, { text: pesan });
-    setUserState(jid, 'WAITING_LANJUT_SESI');
-  } else {
-    // SUDAH_CAPAI_PACE / PAS_PACE (100% target hari ini): tetap kasih tau + apresiasi,
-    // TAPI tetap tawarkan lanjut (bukan ditutup otomatis) -- poin 1 note terbaru.
-    let pesan = await groqAI.generateSudahCapaiPace(nama, user.target_juz_per_hari);
-    if (!pesan) {
-      pesan = `Alhamdulillah, ${nama} udah 100% target hari ini (1 juz per ${user.target_juz_per_hari} hari) 🎉 Mau lanjut baca kartu berikutnya (bonus), atau cukup dulu untuk sesi ini?`;
-    }
-    await sock.sendMessage(jid, { text: pesan });
-    setUserState(jid, 'WAITING_LANJUT_SESI');
-  }
-}
-
-async function tutupSesiBaca(jid, nama) {
-  let pesan = await groqAI.generatePenutupSesiBiasa(nama);
-  if (!pesan) {
-    pesan = `Barakallahu fiik, ${nama} 🤍 Sampai jumpa lagi di waktu sholat berikutnya.`;
-  }
-  await sock.sendMessage(jid, { text: pesan });
-}
-
-function hitungSelisihHari(tanggalMulaiISO, tanggalSekarang) {
-  const mulai = new Date(tanggalMulaiISO);
-  const sekarang = new Date(
-    tanggalSekarang.getFullYear(),
-    tanggalSekarang.getMonth(),
-    tanggalSekarang.getDate()
-  );
-  const mulaiTengahMalam = new Date(mulai.getFullYear(), mulai.getMonth(), mulai.getDate());
-  const selisihMs = sekarang - mulaiTengahMalam;
-  return Math.floor(selisihMs / (1000 * 60 * 60 * 24));
-}
-
 // ========== §7: COUNTER TIDAK BACA + PESAN MOTIVASI ==========
-
-async function cekDanKirimPesan3xJikaPerlu(jid) {
-  const user = getUser(jid);
-  if (user.consecutive_no_response >= 3) {
-    await kirimPesanSetelah3xTidakBaca(jid);
-  }
-}
 
 async function kirimPesanSetelah3xTidakBaca(jid) {
   const user = getUser(jid);
@@ -1177,7 +1110,14 @@ function setupSilentUserChecker() {
     const ambangMs = AMBANG_SILENT_JAM * 60 * 60 * 1000;
     const sekarang = Date.now();
 
+    const hariIni = tanggalHariIniISO();
     const silentUsers = getAllUsers().filter((u) => {
+      // User yang sudah berhenti / belum selesai onboarding / mematikan fitur TIDAK boleh dihitung
+      // (dulu ikut dihitung lalu dikirimi "kamu belum sempat tilawah"), begitu juga yang hari ini
+      // sudah baca (dulu tetap dianggap silent oleh tawaran Isya walau sudah baca saat Subuh).
+      if (u.is_registered !== 1 || u.is_active !== 1 || u.state === 'ONBOARDING') return false;
+      if (u.tawaran_tilawah_aktif === 0 || u.reminder_sholat_aktif === 0) return false;
+      if (u.tanggal_terakhir_baca === hariIni) return false;
       if (!u.waktu_tawaran_terakhir) return false;
       if (u.sudah_lapor_sesi_ini === 1) return false; // sudah ada aktivitas sejak ditawari, bukan silent
       const waktuTawaran = new Date(u.waktu_tawaran_terakhir).getTime();
@@ -1185,12 +1125,19 @@ function setupSilentUserChecker() {
     });
 
     for (const u of silentUsers) {
-      incrementNoResponse(u.jid);
-      console.log(`⏳ User ${u.jid} dianggap silent, counter naik.`);
+      try {
+        incrementNoResponse(u.jid);
+        // Tandai tawaran ini sudah dihitung: tanpa ini user yang sama dihitung lagi tiap 3 jam
+        // untuk tawaran yang sama (flag di-reset saat tawaran berikutnya dikirim).
+        setSudahLaporSesiIni(u.jid, true);
+        console.log(`⏳ User ${samarkanJid(u.jid)} dianggap silent, counter naik.`);
 
-      const userTerbaru = getUser(u.jid);
-      if (userTerbaru.consecutive_no_response >= 3) {
-        await kirimPesanSetelah3xTidakBaca(u.jid);
+        const userTerbaru = getUser(u.jid);
+        if (userTerbaru.consecutive_no_response >= 3) {
+          await kirimPesanSetelah3xTidakBaca(u.jid);
+        }
+      } catch (err) {
+        console.error(`❌ Gagal proses silent user ${samarkanJid(u.jid)}:`, err.message);
       }
     }
 
@@ -1235,7 +1182,12 @@ async function kirimReminderSholat(waktuSholat, jid) {
   }
 
   console.log(`⏳ Menjadwalkan tawaran ngaji dalam ${JEDA_TAWARAN_MS / 1000} detik...`);
-  setTimeout(() => kirimTawaranNgaji(jid), JEDA_TAWARAN_MS);
+  setTimeout(() => {
+    // Cek ulang saat jatuh tempo: user bisa saja berhenti / mematikan tawaran dalam 10 menit itu.
+    const u = getUserIfExists(jid);
+    if (!u || u.is_active === 0 || u.tawaran_tilawah_aktif === 0 || u.state === 'ONBOARDING') return;
+    kirimTawaranNgaji(jid).catch((err) => console.error(`❌ Gagal kirim tawaran ngaji ke ${samarkanJid(jid)}:`, err.message));
+  }, JEDA_TAWARAN_MS);
 }
 
 async function kirimTawaranNgaji(jid) {
@@ -1293,14 +1245,19 @@ function setupReminderJumatLakiScheduler() {
   cron.schedule(cronExpr, async () => {
     console.log('\n🕌 Mengirim reminder Jumat (laki-laki)...');
     const targets = getAllUsers().filter(
-      (u) => u.is_registered === 1 && u.is_active === 1 && u.gender === 'L' && u.reminder_jumat_laki_aktif !== 0
+      (u) => u.is_registered === 1 && u.is_active === 1 && u.state !== 'ONBOARDING' && u.gender === 'L' && u.reminder_jumat_laki_aktif !== 0
     ); // <-- tambahan filter reminder_jumat_laki_aktif
     if (targets.length === 0) {
       console.log('⚠️  Tidak ada user laki-laki teraktivasi, reminder Jumat dilewati.');
       return;
     }
     for (const u of targets) {
-      await kirimReminderJumatLaki(u.jid);
+      try {
+        await kirimReminderJumatLaki(u.jid);
+      } catch (err) {
+        console.error(`❌ Gagal kirim reminder Jumat ke ${samarkanJid(u.jid)}:`, err.message);
+      }
+      await jedaAcak(500, 1500);
     }
   });
 
@@ -1312,12 +1269,12 @@ function setupReminderJumatLakiScheduler() {
 // saling menyemangati, dan ngobrol soal tilawah. Bot silent di grup kecuali
 // di-tag/mention/reply, atau sedang dalam flow setup yang aktif.
 
-async function handleIncomingGroupMessage(groupJid, senderJid, text, message) {
+async function handleIncomingGroupMessage(groupJid, senderJid, teksAsli, konten, key) {
   const group = getGroup(groupJid);
-  const ditag = apakahBotDitag(message);
+  const ditag = apakahBotDitag(konten);
 
-  // Keyword aktivasi grup -- siapa saja di grup bisa trigger setup
-  if (text === KEYWORD_AKTIVASI && (!group || group.is_aktif === 0)) {
+  // Keyword aktivasi grup -- siapa saja di grup bisa trigger setup (tanda baca diabaikan: "Dawam.")
+  if (bersihkanUntukCocok(teksAsli) === KEYWORD_AKTIVASI && (!group || group.is_aktif === 0)) {
     aktifkanGroup(groupJid);
 
     // Ambil roster lengkap grup via Baileys, supaya SEMUA anggota tercatat di
@@ -1377,17 +1334,23 @@ async function handleIncomingGroupMessage(groupJid, senderJid, text, message) {
   const senderJidTernormalisasi = await resolveSenderJidViaGroupMetadata(groupJid, senderJid);
   tambahAnggotaGroup(groupJid, senderJidTernormalisasi);
   setGroupSosialJikaBelumAda(senderJidTernormalisasi, groupJid);
-  await routeGroupMessage(groupJid, senderJidTernormalisasi, text);
+  if (key) await tandaiDibaca(key);
+  await routeGroupMessage(groupJid, senderJidTernormalisasi, teksAsli);
 }
-async function routeGroupMessage(groupJid, senderJid, text) {
+async function routeGroupMessage(groupJid, senderJid, teksAsli) {
   const namaSender = getUserName(senderJid) || null;
   const senderBelumOnboarding = !isUserRegistered(senderJid);
 
-  if (!text || text.length < 2) {
-    console.log('(Pesan grup terlalu pendek/kosong, diabaikan)');
+  // Buang token "@628xxx" (mention bot) sebelum diteruskan ke AI.
+  const text = String(teksAsli || '').replace(/@\d{5,}/g, '').replace(/\s+/g, ' ').trim();
+  if (!text) {
+    // Cuma ditag tanpa isi -> sapa singkat, jangan diam.
+    await sock.sendMessage(groupJid, { text: 'Iya, ada yang bisa Dawam bantu? 😊' });
     return;
   }
 
+  // Riwayat diambil SEBELUM pesan baru disimpan (agent menambahkan pesan baru sendiri).
+  const historiChat = getChatHistory(groupJid, 15);
   simpanChatHistory(groupJid, 'user', `${namaSender || 'Seseorang'}: ${text}`, senderJid);
 
   const konteks = {
@@ -1406,21 +1369,21 @@ async function routeGroupMessage(groupJid, senderJid, text) {
     kirimTagKeGrup: (targetGroupJid, pesan, jidList) => kirimTagKeGrup(targetGroupJid, pesan, jidList),
     ambilTawaranLelangAktif: (targetGroupJid, namaTarget) => ambilTawaranLelangAktif(targetGroupJid, namaTarget),
     kirimCardLelangPersonal: (penerimaJid, pemilikJid) => kirimCardLelangPersonal(penerimaJid, pemilikJid),
-    tandaiTawaranSudahDiklaim: (targetGroupJid, userJid) => tandaiTawaranSudahDiklaim(targetGroupJid, userJid),
+    tandaiTawaranSudahDiklaim: (targetGroupJid, userJid, pengklaimJid) => tandaiTawaranSudahDiklaim(targetGroupJid, userJid, pengklaimJid),
   };
 
-  const hasil = await jalankanAgentDawam({
+  const hasil = await jalankanAgentDenganIndikator(groupJid, {
     systemPrompt: buatPromptGrup(namaSender, senderBelumOnboarding),
     tools: TOOLS_GRUP,
-    historiChat: getChatHistory(groupJid, 15),
-    pesanBaru: text,
+    historiChat,
+    pesanBaru: `${namaSender || 'Seseorang'}: ${text}`,
     eksekutorTools: EKSEKUTOR_GRUP,
     konteks,
   });
 
   if (hasil.error || !hasil.jawabanFinal) {
-    console.log(`⚠️  Agent grup gagal/kosong untuk ${groupJid}: ${hasil.error}`);
-    await sock.sendMessage(groupJid, { text: PESAN_TIDAK_DIMENGERTI });
+    console.log(`⚠️  Agent grup gagal/kosong untuk ${samarkanJid(groupJid)}: ${hasil.error}`);
+    await sock.sendMessage(groupJid, { text: hasil.toolSukses.length > 0 ? PESAN_SELESAI_TANPA_JAWABAN : PESAN_TIDAK_DIMENGERTI });
     return;
   }
 
@@ -1443,7 +1406,7 @@ function formatRekapMingguanTerstruktur(groupJid) {
 
   for (const jid of anggotaJids) {
     const user = getUser(jid);
-    if (user.is_registered !== 1) continue;
+    if (user.is_registered !== 1 || user.is_active === 0) continue; // belum aktivasi / sudah berhenti
 
     const logMingguIni = getLogBacaanHarianRange(jid, tanggalMulaiISO, tanggalSelesai);
     const totalKartu = logMingguIni.reduce((acc, l) => acc + l.jumlah_kartu, 0);
@@ -1452,26 +1415,19 @@ function formatRekapMingguanTerstruktur(groupJid) {
     if (totalKartu > 0) adaDataSamaSekali = true;
 
     const sisa = hitungSisaProgressUser(jid);
-    const posisiAkhir = logMingguIni.length > 0
-      ? logMingguIni[logMingguIni.length - 1].surat_ayat_akhir
-      : 'belum ada bacaan minggu ini';
+    // Laporan manual tidak punya label surat/ayat: cari log terakhir yang berlabel, kalau tidak
+    // ada tulis jujur (dulu tampil "null").
+    const logBerlabel = [...logMingguIni].reverse().find((l) => l.surat_ayat_akhir);
+    const posisiAkhir = logBerlabel
+      ? logBerlabel.surat_ayat_akhir
+      : logMingguIni.length > 0
+        ? 'laporan manual (tanpa posisi)'
+        : 'belum ada bacaan minggu ini';
 
-    // Persen mingguan WAJIB (poin 2): rata-rata dari persen harian minggu ini (sisa capai
-    // target = 100%, lihat hitungSisaProgressUser). Kalau target user santai ('6'/belum ada),
-    // tidak ada angka harian yang relevan sama sekali -> null ("-"), BUKAN 0%.
-    let persenMingguan = null;
-    if (sisa.ada_target) {
-      // Reuse status_pace_akhir yang disimpan tiap hari di log_bacaan_harian sebagai proxy:
-      // SUDAH_CAPAI_PACE/PAS_PACE dihitung 100% hari itu, DI_BAWAH_PACE dihitung dari snapshot
-      // hari ini (sisa.persen_pace) sebagai representasi rata-rata kasar.
-      const hariCapaiTarget = logMingguIni.filter(
-        (l) => l.status_pace_akhir === 'SUDAH_CAPAI_PACE' || l.status_pace_akhir === 'PAS_PACE'
-      ).length;
-      const totalHariDenganData = logMingguIni.filter((l) => l.status_pace_akhir !== null).length;
-      persenMingguan = totalHariDenganData > 0
-        ? Math.round((hariCapaiTarget / totalHariDenganData) * 100)
-        : (sisa.persen_pace ?? 0);
-    }
+    // Rata-rata capaian target harian selama 7 hari (hari kosong = 0%), dari data log nyata.
+    // null (user tanpa target valid) tampil "-", BUKAN 0%. Versi lama bergantung pada
+    // status_pace_akhir yang tidak pernah terisi, sehingga yang tampil sebenarnya persen HARI INI.
+    const persenMingguan = hitungPersenMingguan(jid, tanggalMulaiISO, tanggalSelesai);
 
     baris.push({
       nama: user.name || 'Sahabat',
@@ -1520,17 +1476,19 @@ function setupGroupMotivasiScheduler() {
       let kalimatPenutup = await groqAI.generateKalimatMotivasiRekapHarian(false);
       const pesanFinal = kalimatPenutup ? `${teksRekap}\n\n${kalimatPenutup}` : teksRekap;
 
-      await sock.sendMessage(g.jid, { text: pesanFinal });
-      setGroupWaktuMotivasiTerakhir(g.jid, new Date().toISOString());
-      console.log(`✅ Rekap mingguan terkirim ke grup ${g.jid}`);
+      try {
+        await sock.sendMessage(g.jid, { text: pesanFinal });
+        setGroupWaktuMotivasiTerakhir(g.jid, new Date().toISOString());
+        console.log(`✅ Rekap mingguan terkirim ke grup ${samarkanJid(g.jid)}`);
+        await jedaAcak(1500, 3500);
+      } catch (err) {
+        console.error(`❌ Gagal kirim rekap mingguan ke grup ${samarkanJid(g.jid)}:`, err.message);
+      }
     }
   });
 
   console.log(`🕒 Group rekap mingguan scheduler diset (${INTERVAL_CRON_MOTIVASI_GROUP}).`);
 }
-
-// ---- Rekap harian progress ke grup aktif, jam 20:00 (poin 1) ----
-let rekapHarianSchedulerSudahDiset = false;
 
 // Anggota yang sudah aktivasi tapi belum baca hari ini -- kandidat untuk di-tag.
 function ambilJidBelumBacaHariIni(dataRekap) {
@@ -1590,7 +1548,7 @@ function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
     if (jidBelumBaca.length > 0) {
       const namaBelumBaca = dataRekap.filter((d) => jidBelumBaca.includes(d.jid));
       const tagText = namaBelumBaca.map((d) => `@${d.jid.split('@')[0]}`).join(' ');
-      teks += `🤍 Yuk mampir sebentar sebelum Isya, belum sempat baca hari ini: ${tagText}`;
+      teks += `🤍 Yuk sempatkan tilawah dulu hari ini, belum tercatat baca: ${tagText}`;
       jidUntukMention = jidBelumBaca;
     }
   }
@@ -1614,32 +1572,16 @@ function setupLelangIsyaScheduler() {
     }
 
     for (const g of grupAktif) {
-      await kirimTawaranLelangKeGrup(g.jid);
+      try {
+        await kirimTawaranLelangKeGrup(g.jid);
+        await jedaAcak(1500, 3500);
+      } catch (err) {
+        console.error(`❌ Gagal kirim laporan harian ke grup ${samarkanJid(g.jid)}:`, err.message);
+      }
     }
   });
 
   console.log(`🕒 Lelang Isya scheduler diset (${INTERVAL_CRON_LELANG_ISYA}).`);
-}
-
-function setupRekapHarianScheduler() {
-  if (rekapHarianSchedulerSudahDiset) return;
-  rekapHarianSchedulerSudahDiset = true;
-
-  cron.schedule(INTERVAL_CRON_REKAP_HARIAN, async () => {
-    console.log('\n📊 Mengirim rekap harian ke grup aktif...');
-    const grupAktif = getAllGroupsAktif();
-
-    if (grupAktif.length === 0) {
-      console.log('(Tidak ada grup aktif saat ini)');
-      return;
-    }
-
-    for (const g of grupAktif) {
-      await kirimRekapHarianKeGrup(g.jid, false, true);
-    }
-  });
-
-  console.log(`🕒 Rekap harian scheduler diset (${INTERVAL_CRON_REKAP_HARIAN}).`);
 }
 
 // Dipakai cron DAN trigger manual (lewat tool grup) -- satu sumber logic.
@@ -1687,10 +1629,6 @@ async function kirimTagKeGrup(groupJid, pesanPembuka, jidList) {
 // Tiap Jumat pagi, tawarkan mulai/lanjut cicilan Al-Kahfi -- terpisah dari progress
 // khataman utama. Posisi disimpan di last_sent_alkahfi_id (bukan last_sent_bacaan_id).
 
-function getBacaanAlkahfiByUrutan(urutan) {
-  const row = db.prepare('SELECT * FROM bacaan WHERE urutan = ? AND surat_ayat LIKE ?').get(urutan, 'Al-Kahf%');
-  return row || null;
-}
 async function kirimTawaranAlkahfi(jid) {
   const user = getUser(jid);
   const nama = getUserName(jid) || 'Sahabat Dawam';
@@ -1698,6 +1636,7 @@ async function kirimTawaranAlkahfi(jid) {
   await sock.sendMessage(jid, { text: teks });
   simpanChatHistory(jid, 'assistant', teks);
   setUserState(jid, 'WAITING_KONFIRMASI_ALKAHFI');
+  setAlkahfiOfferAt(jid, new Date().toISOString());
   console.log(`✅ Tawaran Al-Kahfi terkirim ke ${jid}`);
 }
 
@@ -1745,9 +1684,14 @@ function setupAlkahfiJumatScheduler() {
       return;
     }
     for (const jid of targets) {
-      const user = getUser(jid);
-      if (user.tawaran_alkahfi_aktif === 0) continue; // <-- tambahan
-      await kirimTawaranAlkahfi(jid);
+      try {
+        const user = getUser(jid);
+        if (user.tawaran_alkahfi_aktif === 0) continue;
+        await kirimTawaranAlkahfi(jid);
+        await jedaAcak(500, 1500);
+      } catch (err) {
+        console.error(`❌ Gagal kirim tawaran Al-Kahfi ke ${samarkanJid(jid)}:`, err.message);
+      }
     }
   });
 
@@ -1775,8 +1719,14 @@ function setupScheduler() {
         console.log('⚠️  Belum ada user yang teraktivasi, reminder dilewati.');
         return;
       }
+      // Satu user gagal (nomor tidak valid, diblokir) TIDAK boleh membatalkan reminder sisanya.
       for (const jid of targets) {
-        await kirimReminderSholat(namaWaktu, jid);
+        try {
+          await kirimReminderSholat(namaWaktu, jid);
+        } catch (err) {
+          console.error(`❌ Gagal kirim reminder ${namaWaktu} ke ${samarkanJid(jid)}:`, err.message);
+        }
+        await jedaAcak(500, 1500);
       }
     });
 
@@ -1813,7 +1763,12 @@ process.stdin.on('data', async (data) => {
       return;
     }
     for (const jid of targets) {
-      await kirimReminderSholat(input, jid);
+      try {
+        await kirimReminderSholat(input, jid);
+      } catch (err) {
+        console.error(`❌ Gagal kirim reminder ${input} ke ${samarkanJid(jid)}:`, err.message);
+      }
+      await jedaAcak(500, 1500);
     }
   } else if (input === 'help') {
     printHelp();
