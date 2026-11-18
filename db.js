@@ -1,7 +1,10 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-const db = new Database(path.join(__dirname, 'dawam.db'));
+// DAWAM_DB_PATH hanya untuk test/dev (mis. ':memory:'); default tetap dawam.db di folder project.
+const db = new Database(process.env.DAWAM_DB_PATH || path.join(__dirname, 'dawam.db'));
+// Tunggu (bukan langsung error "database is locked") kalau skrip lain sedang menulis DB.
+db.pragma('busy_timeout = 5000');
 
 // ========== TANGGAL (WIB) ==========
 // SEMUA tanggal "hari ini" di aplikasi WAJIB lewat helper ini, bukan
@@ -537,8 +540,20 @@ function updateUserFields(jid, data) {
     'reminder_sholat_aktif', 'tawaran_tilawah_aktif', 'tawaran_alkahfi_aktif',
     'reminder_jumat_laki_aktif', 'bentuk_bacaan',
   ];
-  const entries = Object.entries(data || {}).filter(([k, v]) => {
+  // Rapikan input teks dari AI sebelum divalidasi: nama/lokasi satu baris & dibatasi panjangnya
+  // (nilai ini dimasukkan ke prompt), gender dinormalkan ke huruf besar.
+  const rapikan = ([k, v]) => {
+    if (typeof v !== 'string') return [k, v];
+    if (k === 'name' || k === 'location') return [k, v.replace(/\s+/g, ' ').trim().slice(0, 60)];
+    if (k === 'gender') return [k, v.trim().toUpperCase()];
+    return [k, v];
+  };
+  const entries = Object.entries(data || {}).map(rapikan).filter(([k, v]) => {
     if (!kolomValid.includes(k) || v === null || v === undefined || v === '') return false;
+    if (k === 'gender' && v !== 'L' && v !== 'P') {
+      console.log(`⚠️  gender="${v}" tidak valid (harus L/P), diabaikan.`);
+      return false;
+    }
     if (k === 'target_juz_per_hari' && !isTargetValid(v)) {
       console.log(`⚠️  target_juz_per_hari="${v}" tidak valid, diabaikan.`);
       return false;

@@ -3,10 +3,11 @@ const OpenAI = require('openai');
 const groq = new OpenAI({
   apiKey: process.env.AI_API_KEY,
   baseURL: process.env.AI_BASE_URL,
+  timeout: 90_000,
+  maxRetries: 1,
 });
 
 const MODEL = process.env.AI_MODEL;
-const { TOOLS_SCHEMA } = require('./tools');
 
 // ========== SYSTEM PROMPT DASAR (karakter Dawam) ==========
 
@@ -29,29 +30,6 @@ ATURAN PENULISAN WAJIB (PELANGGARAN = FATAL):
 - Jangan menyisipkan isi dari pesan lain atau instruksi lain yang tidak diminta. Hasilkan HANYA pesan sesuai permintaan spesifik di prompt user, tidak lebih.
 - Selesaikan kalimat dengan lengkap, jangan terpotong di tengah.`;
 
-
-// ========== KNOWLEDGE BASE TETAP SOAL DAWAM (dipakai di generateJawabanTentangDawam) ==========
-// Fakta-fakta ini TIDAK BOLEH dikarang ulang / diubah-ubah tiap kali dijawab AI.
-
-const FAKTA_TENTANG_DAWAM = `
-FITUR DAWAM:
-- Reminder sholat 5 waktu (Subuh, Dzuhur, Ashar, Maghrib, Isya), dikirim personal ke chat pribadi masing-masing.
-- Dampingan tilawah Al-Qur'an harian, dikirim personal setelah reminder sholat (bukan di grup).
-- Tracking progress bacaan (posisi surat/ayat, juz, target khatam).
-- Mode terjemah-saja: khusus untuk halangan (haid), bacaan dikirim terjemahnya saja tanpa gambar Arab.
-- Fitur sosial grup: tempat lapor progress dan saling menyemangati antar anggota. Grup BUKAN tempat menerima bacaan Al-Qur'an -- bacaan selalu dikirim personal ke masing-masing orang, supaya tidak spam grup.
-
-CARA AKTIVASI PERSONAL:
-- Kirim kata "dawam" ke chat personal/pribadi bot.
-
-CARA AKTIVASI GRUP:
-- Invite/tambahkan bot ke grup WhatsApp (TIDAK perlu dijadikan admin grup).
-- Setelah itu, siapa saja di grup kirim kata "dawam" di grup tersebut untuk mengaktifkan.
-
-PERILAKU DI GRUP:
-- Setelah aktif, Dawam di grup bersifat silent secara default.
-- Dawam hanya merespon di grup kalau di-tag/mention langsung, atau pesannya di-reply (reply ke pesan Dawam).
-`.trim();
 
 
 // ========== GENERATE PESAN DINAMIS (existing, tidak berubah) ==========
@@ -89,20 +67,7 @@ Balas HANYA dengan isi pesannya saja, tanpa tanda kutip, tanpa penjelasan tambah
   return await callGroqText(prompt);
 }
 
-async function generateResponYa(namaUser) {
-  const prompt = `${namaUser} baru saja bilang "ya" (mau lanjut tilawah). Buatkan SATU kalimat pendek yang hangat dan menyemangati, SEBUTKAN namanya (${namaUser}) di kalimat itu, sebelum bot mengirimkan gambar bacaan Al-Qur'an.
-Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
-  return await callGroqText(prompt);
-}
-
-async function generateResponTidak(namaUser) {
-  const prompt = `${namaUser} baru saja bilang "nanti"/belum siap untuk tilawah hari ini. Buatkan SATU pesan singkat yang hangat, tidak menghakimi, tetap menyemangati tanpa memaksa. SEBUTKAN namanya (${namaUser}) di pesan ini.
-Boleh sesekali selipkan hadits pendek tentang istiqomah/konsistensi dalam amal walau sedikit, tapi tidak wajib.
-Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
-
-  return await callGroqText(prompt);
-}
 
 async function generateFallbackChat(namaUser, pesanUser) {
   const prompt = `${namaUser ? namaUser : 'Seseorang'} baru saja mengirim SATU pesan ini ke kamu (Dawam) di WhatsApp, di luar konteks flow yang biasa (bukan jawaban ya/nanti untuk ajakan tilawah):
@@ -115,75 +80,9 @@ Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
   return await callGroqText(prompt, 300);
 }
 
-async function generateJawabanTentangDawam(namaUser, pesanUser) {
-  const prompt = `${namaUser ? namaUser : 'Seseorang'} bertanya tentang Dawam (kamu sendiri) lewat WhatsApp:
-
-"${pesanUser}"
-
-Berikut fakta-fakta TETAP soal Dawam yang WAJIB kamu pakai apa adanya untuk menjawab -- JANGAN mengarang, mengubah, atau menambahkan detail yang tidak ada di fakta ini:
-
-${FAKTA_TENTANG_DAWAM}
-
-Jawab pertanyaan user HANYA berdasarkan fakta di atas, dengan gaya bahasamu yang natural dan hangat (tidak perlu menyalin persis kalimatnya, boleh diparafrase). Kalau pertanyaannya menyangkut hal yang TIDAK ada di fakta di atas, jawab jujur bahwa kamu belum tahu/belum ada infonya, JANGAN mengarang jawaban.
-Balas HANYA dengan isi pesannya saja, tanpa tanda kutip, tanpa penjelasan tambahan.`;
-
-  return await callGroqText(prompt, 400);
-}
 
 // ========== FUNGSI BARU PHASE 2: GENERATE PESAN ==========
 
-async function generateJawabanProgress(namaUser, pesanUser, toolExecutors) {
-  const messages = [
-    {
-      role: 'system',
-      content: SYSTEM_PROMPT + '\n\nUser sedang bertanya soal progress tilawahnya. WAJIB panggil tool yang relevan dulu untuk ambil data asli sebelum menjawab -- JANGAN PERNAH mengarang posisi bacaan, juz, atau target.',
-    },
-    { role: 'user', content: `${namaUser} bertanya: "${pesanUser}"` },
-  ];
-
-  try {
-    const first = await groq.chat.completions.create({
-      model: MODEL,
-      messages,
-      tools: TOOLS_SCHEMA,
-      max_tokens: 400,
-    });
-
-    const msg = first.choices[0]?.message;
-    if (!msg) return null;
-
-    if (msg.tool_calls?.length) {
-      messages.push(msg);
-      for (const call of msg.tool_calls) {
-        const executor = toolExecutors[call.function.name];
-        const result = executor ? executor() : { error: 'tool tidak ditemukan' };
-        messages.push({
-          role: 'tool',
-          tool_call_id: call.id,
-          content: JSON.stringify(result),
-        });
-      }
-      const final = await groq.chat.completions.create({ model: MODEL, messages, max_tokens: 400 });
-      return final.choices[0]?.message?.content?.trim() || null;
-    }
-
-    return msg.content?.trim() || null;
-  } catch (err) {
-    console.error('❌ Gagal generateJawabanProgress:', err.message);
-    return null;
-  }
-}
-
-/**
- * Tawaran baca terjemah setelah baca Arab (§5).
- */
-async function generateTawaranTerjemah(namaUser) {
-  const prompt = `${namaUser} baru saja selesai membaca kartu bacaan Arab. Buatkan SATU pesan singkat (2-3 kalimat), SEBUTKAN namanya (${namaUser}), menanyakan apakah dia mau lanjut membaca artinya (terjemah) juga.
-Minta dia membalas dengan kata-kata sederhana seperti "ya" atau "nanti"/"tidak".
-Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
-
-  return await callGroqText(prompt);
-}
 
 /**
  * Tawaran lanjut baca dalam sesi yang sama, untuk user dengan target 3/1 hari per juz (§4.3).
@@ -262,20 +161,6 @@ Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
   return await callGroqText(prompt);
 }
 
-/**
- * Konfirmasi hangat saat mode terjemah-saja diaktifkan/dinonaktifkan (§6.2, §6.3).
- */
-async function generateKonfirmasiModeHalangan(namaUser, aktifkan) {
-  const instruksi = aktifkan
-    ? `memberitahu bahwa mode terjemah-saja sudah diaktifkan untuknya -- mulai sekarang dia akan menerima bacaan terjemah saja (tanpa Arab) sampai dia bilang sudah selesai`
-    : `memberitahu bahwa mode terjemah-saja sudah dinonaktifkan -- mulai sekarang dia akan kembali menerima bacaan Arab seperti biasa`;
-
-  const prompt = `Buatkan SATU pesan pendek (1-2 kalimat) untuk ${namaUser}, ${instruksi}.
-Nada hangat dan suportif, tidak kaku.
-Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
-
-  return await callGroqText(prompt);
-}
 
 // ========== PARSING INTENT JAWABAN (existing, tidak berubah) ==========
 
@@ -308,26 +193,6 @@ Balas HANYA dengan satu kata: YA, TIDAK, atau TIDAK_JELAS. Tanpa penjelasan tamb
   return fallbackKeywordIntent(pesanUser);
 }
 
-async function classifyIntentBebas(pesanUser) {
-  const prompt = `Klasifikasikan pesan user berikut ke SALAH SATU kategori:
-
-"${pesanUser}"
-
-- TANYA_PROGRESS (nanya posisi bacaan, udah sampe mana, udah berapa juz, target gimana)
-- MINTA_LANJUT (minta dikirimkan bacaan lagi / lanjut baca sekarang)
-- TANYA_TENTANG_DAWAM (nanya soal Dawam itu sendiri: fitur-fiturnya, cara kerja, cara aktivasi personal/grup, siapa/apa itu Dawam, dll -- BUKAN soal progress bacaan pribadi user)
-- LAINNYA (semua yang lain -- jawaban flow aktif, curhat, sapaan, dll)
-
-Balas HANYA satu kata: TANYA_PROGRESS, MINTA_LANJUT, TANYA_TENTANG_DAWAM, atau LAINNYA.`;
-
-  const hasil = await callGroqText(prompt, 50, { temperature: 0.1 });
-  if (!hasil) return 'LAINNYA';
-  const cleaned = hasil.trim().toUpperCase();
-  if (cleaned.includes('TANYA_TENTANG_DAWAM')) return 'TANYA_TENTANG_DAWAM';
-  if (cleaned.includes('TANYA_PROGRESS')) return 'TANYA_PROGRESS';
-  if (cleaned.includes('MINTA_LANJUT')) return 'MINTA_LANJUT';
-  return 'LAINNYA';
-}
 
 function fallbackKeywordIntent(pesanUser) {
   const text = pesanUser.trim().toLowerCase();
@@ -341,55 +206,7 @@ function fallbackKeywordIntent(pesanUser) {
 
 // ========== FUNGSI BARU PHASE 2: PARSING ==========
 
-/**
- * Parse jawaban onboarding gender jadi 'L' | 'P' | 'TIDAK_JELAS' (§3 poin 3).
- */
-async function parseGenderDariJawaban(pesanUser) {
-  const prompt = `Seorang pengguna ditanya apakah dia "Akhi" (laki-laki) atau "Ukhti" (perempuan). Dia menjawab:
 
-"${pesanUser}"
-
-Klasifikasikan ke SALAH SATU:
-- L (kalau menjawab laki-laki/akhi/cowok/pria/ikhwan, dalam bentuk apapun)
-- P (kalau menjawab perempuan/ukhti/cewek/wanita/akhwat, dalam bentuk apapun)
-- TIDAK_JELAS (kalau tidak bisa ditentukan)
-
-Balas HANYA dengan satu kata: L, P, atau TIDAK_JELAS.`;
-
-  const hasil = await callGroqText(prompt, 50);
-  if (!hasil) return 'TIDAK_JELAS';
-
-  const cleaned = hasil.trim().toUpperCase();
-  if (cleaned.includes('TIDAK_JELAS')) return 'TIDAK_JELAS';
-  if (cleaned.startsWith('L')) return 'L';
-  if (cleaned.startsWith('P')) return 'P';
-  return 'TIDAK_JELAS';
-}
-
-/**
- * Parse jawaban onboarding target kecepatan jadi '6' | '3' | '1' | 'TIDAK_JELAS' (§3 poin 4).
- */
-async function parseTargetDariJawaban(pesanUser) {
-  const prompt = `Seorang pengguna ditanya mau targetkan khatam 1 juz Al-Qur'an berapa hari, dengan 3 pilihan dalam bentuk list bernomor:
-1. 6 hari (santai)
-2. 3 hari (sedang)
-3. 1 hari (cepat)
-
-Dia menjawab:
-"${pesanUser}"
-
-Dia bisa jawab pakai ANGKA PILIHAN (1/2/3 sesuai urutan list di atas) ATAU teks bebas (misal "santai", "yang cepat", "3 hari"). Klasifikasikan jawabannya ke SALAH SATU: 6, 3, 1, atau TIDAK_JELAS (kalau tidak bisa ditentukan).
-Balas HANYA dengan satu kata/angka itu saja (6, 3, 1, atau TIDAK_JELAS).`;
-
-  const hasil = await callGroqText(prompt, 50);
-  if (!hasil) return 'TIDAK_JELAS';
-
-  const cleaned = hasil.trim();
-  if (cleaned.includes('6')) return '6';
-  if (cleaned.includes('3')) return '3';
-  if (cleaned.includes('1')) return '1';
-  return 'TIDAK_JELAS';
-}
 
 /**
  * Parse jawaban "mau mulai dari surat mana" jadi { surat, ayat } atau null (§3.1).
@@ -434,36 +251,6 @@ Jika dia bilang "dari awal"/"Al-Fatihah"/tidak menyebutkan surat spesifik/jawaba
   }
 }
 
-/**
- * Parse pesan bebas untuk deteksi niat aktifkan/nonaktifkan mode terjemah-saja (§6.3).
- * Return: 'AKTIFKAN' | 'NONAKTIFKAN' | 'TIDAK_RELEVAN'
- */
-async function parseModeHalanganIntent(pesanUser) {
-  const prompt = `Seorang pengguna (perempuan) sedang mengobrol dengan bot pengingat tilawah Al-Qur'an. Bot punya fitur "mode terjemah-saja" untuk saat pengguna SEDANG HAID dan tidak ingin memegang mushaf Arab -- dalam mode ini bot hanya kirim bacaan terjemah, bukan Arab.
-
-Pesan dari pengguna:
-"${pesanUser}"
-
-ATURAN KETAT: defaultkan ke TIDAK_RELEVAN kecuali pesan SECARA EKSPLISIT dan JELAS menyebut kondisi haid/halangan/datang bulan, atau EKSPLISIT menyebut sudah selesai/suci dari itu. Jangan menyimpulkan dari konteks tidak langsung.
-
-Klasifikasikan niat pesan ini ke SALAH SATU:
-- AKTIFKAN -- HANYA jika pengguna secara eksplisit bilang sedang haid/halangan/datang bulan/tidak suci (contoh: "aku lagi halangan", "lagi haid nih", "lagi datang bulan", "ga pegang mushaf dulu ya soalnya haid")
-- NONAKTIFKAN -- HANYA jika pengguna sedang dalam mode terjemah-saja DAN secara eksplisit bilang sudah selesai haid/sudah suci (contoh: "udah suci", "udah selesai haidnya", "udah bersih")
-- TIDAK_RELEVAN -- SEMUA kasus lain, termasuk: nama surat ("ar rahman"), kata umum "sudah selesai" tanpa konteks haid, "aku mau baca arab" (ini soal preferensi baca, BUKAN soal haid), pertanyaan, obrolan biasa, jawaban ya/nanti/lanjut untuk ajakan tilawah, atau apapun yang tidak eksplisit menyebut haid/halangan.
-
-Kata "sudah selesai" atau "aku mau baca arab" SENDIRIAN TANPA konteks haid sebelumnya HARUS diklasifikasikan TIDAK_RELEVAN, bukan NONAKTIFKAN.
-
-Balas HANYA dengan satu kata: AKTIFKAN, NONAKTIFKAN, atau TIDAK_RELEVAN.`;
-
-  const hasil = await callGroqText(prompt, 50);
-  if (!hasil) return 'TIDAK_RELEVAN';
-
-  const cleaned = hasil.trim().toUpperCase();
-  if (cleaned.includes('TIDAK_RELEVAN')) return 'TIDAK_RELEVAN';
-  if (cleaned.includes('NONAKTIFKAN')) return 'NONAKTIFKAN';
-  if (cleaned.includes('AKTIFKAN')) return 'AKTIFKAN';
-  return 'TIDAK_RELEVAN';
-}
 
 /**
  * Extract SEMUA field onboarding yang bisa ditangkap dari satu pesan user,
@@ -577,64 +364,8 @@ Balas HANYA isi pesannya, tanpa tanda kutip.`;
 // Bacaan (gambar Arab/terjemah) TIDAK PERNAH dikirim lewat fungsi-fungsi ini --
 // itu tetap jalur personal yang sudah ada (kirimBacaanArab di bot.js).
 
-/**
- * Respon hangat saat seseorang di grup cerita/lapor progress tilawahnya
- * (misal "td abis baca an-nisa", "alhamdulillah udah juz 3").
- * Nada menyemangati, publik-friendly (bukan terlalu personal/privat), boleh ajak yang lain.
- */
-async function generateResponLaporanProgres(namaUser, pesanUser, belumOnboardingPersonal = false) {
-  const instruksiOnboarding = belumOnboardingPersonal
-    ? `\n\nCatatan tambahan: ${namaUser} ini TAMPAKNYA belum terdaftar/onboarding di chat PRIBADI dengan Dawam (baru dikenal di grup ini). Selipkan SATU kalimat singkat di akhir balasanmu, dengan nada santai (bukan perintah/formal), mengajak dia kirim kata "dawam" di chat pribadi kalau mau ditemani tilawah harian secara personal juga. Jangan jadikan ini fokus utama balasan, tetap utamakan respon atas pesannya dulu.`
-    : '';
 
-  const prompt = `${namaUser} baru saja cerita di grup WhatsApp soal progress tilawahnya:
 
-"${pesanUser}"
-
-Buatkan SATU balasan singkat (2-3 kalimat, atau 3-4 kalimat kalau ada catatan tambahan di bawah) yang hangat, menyemangati, SEBUTKAN namanya, dan boleh sedikit mengapresiasi di depan grup (karena ini ruang sosial, bukan chat pribadi).
-Boleh sesekali ajak anggota grup lain buat ikut semangat juga, tapi tidak wajib tiap pesan.${instruksiOnboarding}
-Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
-
-  return await callGroqText(prompt, 350);
-}
-
-/**
- * Ajakan ngobrol ringan ke grup soal progress tilawah minggu ini -- BUKAN kirim bacaan,
- * cuma pancingan obrolan santai. Dipakai broadcast berkala (misal tiap beberapa hari).
- */
-async function generateAjakanObrolGroup() {
-  const prompt = `Buatkan SATU pesan singkat (2-4 kalimat) untuk disiarkan ke sebuah grup WhatsApp tilawah Al-Qur'an, isinya ajakan santai buat anggota grup cerita progress tilawah mereka minggu ini -- gimana rasanya, ada kendala apa, atau sekadar lapor udah sampai mana.
-Nada hangat, kayak teman nanya kabar, BUKAN kayak laporan wajib/formal. Boleh selipkan sedikit motivasi dari hadits/ayat pendek, tidak wajib.
-Jangan minta mereka balas dengan format tertentu, biarkan natural.
-Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
-
-  return await callGroqText(prompt, 350);
-}
-
-/**
- * Jawaban atas pertanyaan bebas soal progress GRUP (rekap semua anggota), dipakai saat
- * seseorang tag bot dan nanya semacam "progress kita gimana nih" / "siapa yang udah jalan".
- * dataRekap: array hasil getRekapProgressGroup dari db.js.
- */
-async function generateRekapProgressGroup(pesanUser, dataRekap) {
-  if (!dataRekap || dataRekap.length === 0) {
-    return 'Hmm, belum ada anggota grup yang tercatat progress-nya nih 🙏 Yuk mulai tilawah dan cerita progressnya di sini!';
-  }
-
-  const ringkasanData = dataRekap
-    .map((d) => `- ${d.nama}: ${d.posisi_terakhir}${d.juz_sekarang ? ` (juz ${d.juz_sekarang})` : ''}, target ${d.target_hari_per_juz} hari/juz`)
-    .join('\n');
-
-  const prompt = `Seseorang di grup bertanya: "${pesanUser}"
-
-Ini data progress tilawah anggota grup saat ini:
-${ringkasanData}
-
-Buatkan SATU balasan (3-5 kalimat atau list singkat kalau anggotanya banyak) yang merangkum progress grup dengan hangat dan menyemangati, berdasarkan data di atas SAJA -- JANGAN mengarang nama atau progress yang tidak ada di data.
-Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
-
-  return await callGroqText(prompt, 400);
-}
 
 /**
  * Rekap HARIAN untuk broadcast ke grup (cron jam 20:00) ATAU saat diminta manual
@@ -719,38 +450,25 @@ module.exports = {
   hapusDashTerlarang,
   generateReminderSholat,
   generateTawaranNgaji,
-  generateResponYa,
-  generateResponTidak,
   generateFallbackChat,
-  generateJawabanTentangDawam,
   parseIntentJawaban,
 
   // phase 2 - generate
   generateTawaranNgajiUntukP,
-  generateTawaranTerjemah,
   generateTawaranLanjutSesi,
   generateSudahCapaiPace,
   generatePenutupSesiBiasa,
   generateIngatkanTargetAsli,
   generateTawaranModeHalangan,
   generatePesanSetelah3xTidakBaca,
-  generateKonfirmasiModeHalangan,
 
   // phase 2 - parsing
-  parseGenderDariJawaban,
-  parseTargetDariJawaban,
   parseSuratAyatDariJawaban,
-  parseModeHalanganIntent,
-  generateJawabanProgress,
-  classifyIntentBebas,
   extractDataOnboarding,
   generateLanjutanOnboarding,
   generateCTASetelahOnboarding,
 
   // phase 3 - sosial grup
-  generateResponLaporanProgres,
-  generateAjakanObrolGroup,
-  generateRekapProgressGroup,
   generateKalimatMotivasiRekapHarian,
   generatePerkenalanGroupSosial,
 };

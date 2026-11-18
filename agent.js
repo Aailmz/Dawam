@@ -3,6 +3,9 @@ const OpenAI = require('openai');
 const client = new OpenAI({
   apiKey: process.env.AI_API_KEY,
   baseURL: process.env.AI_BASE_URL,
+  // Default SDK = timeout 10 menit x 3 percobaan; kalau provider macet, chat user menggantung lama.
+  timeout: 90_000,
+  maxRetries: 1,
 });
 
 const MODEL = process.env.AI_MODEL;
