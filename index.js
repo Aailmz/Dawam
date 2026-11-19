@@ -79,11 +79,12 @@ const {
 } = require('./db');
 const groqAI = require('./groq');
 const {
-  TOOLS_PERSONAL,
+  toolsPersonalUntuk,
   TOOLS_GRUP,
   EKSEKUTOR_PERSONAL,
   EKSEKUTOR_GRUP,
 } = require('./tools');
+const power = require('./power');
 const { jalankanAgentDawam } = require('./agent');
 const { buatPromptPersonal, buatPromptGrup } = require('./prompts');
 
@@ -260,6 +261,7 @@ async function startBot() {
       setupLelangIsyaScheduler();
       setupAlkahfiJumatScheduler();
       setupReminderJumatLakiScheduler();
+      setupFeedbackDigestScheduler();
       printHelp();
     }
   });
@@ -549,6 +551,14 @@ async function kirimPesan(jid, text, jedaMsSebelum = 0) {
 // ========== HANDLER PESAN PERSONAL ==========
 
 async function handleIncomingMessage(jid, textAsli, textLower) {
+  // Perintah operator (/power ..., /feedback ...) ditangani sebelum cek registrasi, supaya operator
+  // tidak perlu onboarding dulu. Dari nomor lain, "/power" diperlakukan sebagai pesan biasa.
+  if (power.isOperator(jid) && power.adalahPerintahOperator(textAsli)) {
+    const balasan = await power.tanganiPerintahOperator(textAsli, jid, depsPower);
+    for (const bagian of power.pecahPesan(balasan)) await kirimPesan(jid, bagian);
+    return;
+  }
+
   // Cek dulu: apakah user belum terdaftar dan ngirim keyword aktivasi?
   if (!isUserRegistered(jid)) {
     if (textLower === KEYWORD_AKTIVASI) {
@@ -640,13 +650,13 @@ async function handleIncomingMessage(jid, textAsli, textLower) {
 
   // Konteks "baru ditanya kenapa belum sempat baca" berlaku untuk SATU balasan saja; setelah itu
   // dilepas (dulu menggantung dan terus dimasukkan ke prompt di setiap pesan berikutnya).
-  const systemPrompt = buatPromptPersonal(user);
+  const systemPrompt = buatPromptPersonal(user, { powerUser: power.isPowerUser(jid) });
   if (state === 'WAITING_ALASAN_TIDAK_BACA') setUserState(jid, 'IDLE');
 
   tandaiMengetik(jid);
   const hasil = await jalankanAgentDawam({
     systemPrompt,
-    tools: TOOLS_PERSONAL,
+    tools: toolsPersonalUntuk(jid),
     historiChat: getChatHistory(jid, 12),
     pesanBaru: textAsli,
     eksekutorTools: EKSEKUTOR_PERSONAL,
@@ -1590,6 +1600,53 @@ function setupAlkahfiJumatScheduler() {
   });
 
   console.log(`🕒 Scheduler Al-Kahfi Jumat diset (${INTERVAL_CRON_ALKAHFI_JUMAT}).`);
+}
+
+// ========== DIGEST FEEDBACK POWER USER KE OPERATOR ==========
+
+// Dipakai power.js untuk kirim digest & kabar "feedback selesai" (tanpa power.js pegang socket).
+const depsPower = {
+  kirim: (jid, text) => sock.sendMessage(jid, { text }),
+};
+
+let digestSchedulerSudahDiset = false;
+
+function setupFeedbackDigestScheduler() {
+  if (digestSchedulerSudahDiset) return;
+  digestSchedulerSudahDiset = true;
+
+  if (!power.operatorJid()) {
+    console.log('⚠️  OPERATOR_NUMBER belum diset/valid di .env, digest feedback power user tidak dijadwalkan.');
+    return;
+  }
+
+  // Kalau pengiriman gagal (mis. koneksi WA baru putus), coba SEKALI lagi 10 menit kemudian.
+  // Feedback tidak hilang: baru ditandai terkirim setelah berhasil.
+  const jalankanDigest = async () => {
+    const r = await power.kirimDigest(depsPower);
+    if (r.status === 'GAGAL') {
+      const ulang = setTimeout(() => {
+        power.kirimDigest(depsPower).catch((err) => console.error('❌ Ulang digest feedback gagal:', err));
+      }, 10 * 60 * 1000);
+      ulang.unref?.();
+    }
+  };
+
+  let ekspresi = process.env.FEEDBACK_DIGEST_CRON || power.CRON_DIGEST_DEFAULT;
+  try {
+    jadwalkan(ekspresi, jalankanDigest);
+  } catch (err) {
+    console.error(`❌ FEEDBACK_DIGEST_CRON "${ekspresi}" tidak valid (${err.message}), pakai ${power.CRON_DIGEST_DEFAULT}.`);
+    ekspresi = power.CRON_DIGEST_DEFAULT;
+    jadwalkan(ekspresi, jalankanDigest);
+  }
+  console.log(`🕒 Scheduler digest feedback power user diset (${ekspresi}).`);
+
+  // Bot mati/restart tepat di jam kirim: susul begitu hidup lagi (jeda sebentar biar koneksi stabil).
+  const timer = setTimeout(() => {
+    power.susulDigestJikaTerlewat(depsPower, ekspresi).catch((err) => console.error('❌ Susul digest feedback gagal:', err));
+  }, 10_000);
+  timer.unref?.();
 }
 
 // ========== SCHEDULER OTOMATIS PERSONAL (existing, tidak berubah) ==========
