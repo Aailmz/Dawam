@@ -5,6 +5,9 @@ const path = require('path');
 const db = new Database(process.env.DAWAM_DB_PATH || path.join(__dirname, 'dawam.db'));
 // Tunggu (bukan langsung error "database is locked") kalau skrip lain sedang menulis DB.
 db.pragma('busy_timeout = 5000');
+// WAL opt-in saja (DAWAM_DB_WAL=1). Default mati: mode journal DB di VPS tidak berubah, dan backup
+// dengan menyalin dawam.db saja tetap lengkap. Kalau diaktifkan, backup harus ikut menyalin -wal/-shm.
+if (process.env.DAWAM_DB_WAL === '1') db.pragma('journal_mode = WAL');
 
 // ========== TANGGAL (WIB) ==========
 // SEMUA tanggal "hari ini" di aplikasi WAJIB lewat helper ini, bukan
@@ -596,13 +599,36 @@ function rataKartuPerJuz() {
   return totalKartuKeseluruhan() / 30;
 }
 
-// Ubah selisih halaman jadi deskripsi yang enak dibaca: halaman kalau kecil (<1 juz),
-// juz (bulat, tanpa desimal) kalau besar. Dipakai di sisi "display", basis hitung tetap halaman.
-function formatSelisihUntukTampilan(selisihHalamanAbs) {
-  if (selisihHalamanAbs < rataKartuPerJuz()) {
-    return { satuan: 'halaman', nilai: Math.round(selisihHalamanAbs) };
+// ===== Satuan: DB menyimpan KARTU (1 halaman mushaf = ~3 kartu). Semua angka yang ditampilkan ke
+// user / AI dalam HALAMAN mushaf, supaya sama dengan yang dia lihat di mushaf fisik/app. =====
+const JUMLAH_HALAMAN_MUSHAF = 604;
+
+function kartuPerHalaman() {
+  const total = totalKartuKeseluruhan();
+  return total > 0 ? total / JUMLAH_HALAMAN_MUSHAF : 1;
+}
+
+function kartuKeHalaman(kartu) {
+  return kartu / kartuPerHalaman();
+}
+
+// Laporan manual dari user dalam halaman -> kartu (minimal 1).
+function halamanKeKartu(halaman) {
+  return Math.max(1, Math.round(halaman * kartuPerHalaman()));
+}
+
+// 1 desimal kalau kecil (1.3), bulat kalau >= 10 (21), supaya enak dibaca di chat.
+function bulatkanHalaman(h) {
+  return h >= 10 ? Math.round(h) : Math.round(h * 10) / 10;
+}
+
+// Input dalam KARTU. Output: halaman mushaf kalau < 1 juz, juz (bulat) kalau lebih.
+function formatSelisihUntukTampilan(selisihKartuAbs) {
+  if (selisihKartuAbs < rataKartuPerJuz()) {
+    if (selisihKartuAbs === 0) return { satuan: 'halaman', nilai: 0 };
+    return { satuan: 'halaman', nilai: Math.max(1, Math.round(kartuKeHalaman(selisihKartuAbs))) };
   }
-  const juz = Math.round(selisihHalamanAbs / rataKartuPerJuz());
+  const juz = Math.round(selisihKartuAbs / rataKartuPerJuz());
   return { satuan: 'juz', nilai: juz };
 }
 
@@ -628,6 +654,23 @@ function sudahKhatamSetelahWrap(startBacaanId, idSebelumWrap, idSetelahWrap) {
   return idSetelahWrap >= startBacaanId;
 }
 
+// Khatam = jarak tempuh dari titik start BARU melewati satu putaran penuh pada pengiriman ini.
+// Bekerja untuk start di mana pun (sudahKhatamSetelahWrap hanya benar untuk start di awal mushaf).
+function sudahKhatamSetelahKirim(startBacaanId, posisiSebelum, posisiSesudah) {
+  const total = totalKartuKeseluruhan();
+  if (!total || posisiSebelum === posisiSesudah) return false;
+  const jarakSebelum = hitungHalamanDitempuhDenganWrap(startBacaanId, posisiSebelum);
+  // Kembali tepat ke titik start berarti satu putaran penuh (bukan 0).
+  const jarakSesudah = posisiSesudah === startBacaanId ? total : hitungHalamanDitempuhDenganWrap(startBacaanId, posisiSesudah);
+  return jarakSebelum < total && jarakSesudah >= total;
+}
+
+// Target harian (kartu/hari) dari pilihan "1 juz per N hari". null kalau target tidak valid.
+function hitungTargetHarian(targetJuzPerHari) {
+  if (!isTargetValid(String(targetJuzPerHari))) return null;
+  return Math.round(rataKartuPerJuz() / Number(targetJuzPerHari));
+}
+
 // Basis perhitungan: JARAK YANG SUDAH DITEMPUH dari titik mulai (start_bacaan_id),
 // BUKAN posisi absolut di buku. User bisa mulai dari surat manapun (tidak selalu
 // Al-Fatihah) -- posisi tinggi tidak berarti progress besar kalau start-nya juga tinggi.
@@ -645,9 +688,9 @@ function hitungSisaProgressUser(jid) {
       ada_target: false,
       target_juz_per_hari: user.target_juz_per_hari || null,
       juz_sekarang: juzSekarang,
-      halaman_posisi_sekarang: posisiSekarang,
-      halaman_ditempuh: halamanDitempuh,
-      total_halaman_keseluruhan: totalKartuKeseluruhan(),
+      halaman_posisi_sekarang: bacaan?.halaman ?? 0,
+      halaman_ditempuh: bulatkanHalaman(kartuKeHalaman(halamanDitempuh)),
+      total_halaman_keseluruhan: JUMLAH_HALAMAN_MUSHAF,
       sudah_baca_hari_ini: user.tanggal_terakhir_baca === hariIniISOAwal,
       // null = memang tidak relevan dihitung (belum ada target/belum mulai), BUKAN 0%.
       // Konsumen (rekap) WAJIB tampilkan field ini -- null ditampilkan sebagai "-" bukan di-skip.
@@ -667,9 +710,9 @@ function hitungSisaProgressUser(jid) {
       ada_target: false,
       target_juz_per_hari: user.target_juz_per_hari,
       juz_sekarang: juzSekarang,
-      halaman_posisi_sekarang: posisiSekarang,
-      halaman_ditempuh: halamanDitempuh,
-      total_halaman_keseluruhan: totalKartuKeseluruhan(),
+      halaman_posisi_sekarang: bacaan?.halaman ?? 0,
+      halaman_ditempuh: bulatkanHalaman(kartuKeHalaman(halamanDitempuh)),
+      total_halaman_keseluruhan: JUMLAH_HALAMAN_MUSHAF,
     };
   }
 
@@ -700,14 +743,15 @@ function hitungSisaProgressUser(jid) {
     ada_target: true,
     target_juz_per_hari: user.target_juz_per_hari,
     juz_sekarang: juzSekarang,
-    halaman_posisi_sekarang: posisiSekarang,
-    halaman_ditempuh: halamanDitempuh,
+    halaman_posisi_sekarang: bacaan?.halaman ?? 0,
+    halaman_ditempuh: bulatkanHalaman(kartuKeHalaman(halamanDitempuh)),
     hari_berjalan: hariBerjalan,
-    halaman_target_hari_ini: halamanTarget,
-    halaman_ditempuh_hari_ini: halamanDitempuhHariIni, // <-- tambahan
-    total_halaman_keseluruhan: totalKartuKeseluruhan(),
+    // Semua field "halaman_*" di bawah SUDAH dalam halaman mushaf (bukan kartu).
+    halaman_target_hari_ini: bulatkanHalaman(kartuKeHalaman(halamanTarget)),
+    halaman_ditempuh_hari_ini: bulatkanHalaman(kartuKeHalaman(halamanDitempuhHariIni)),
+    total_halaman_keseluruhan: JUMLAH_HALAMAN_MUSHAF,
     status,
-    selisih_halaman: selisihHalaman,
+    selisih_halaman: bulatkanHalaman(kartuKeHalaman(selisihHalaman)),
     selisih_tampilan: `${status === 'SUDAH_CAPAI_PACE' ? 'lebih' : 'kurang'} ${tampilan.nilai} ${tampilan.satuan}`,
     persen_pace: persenPace,
     sudah_baca_hari_ini: sudahBacaHariIni,
@@ -721,7 +765,9 @@ function hitungSisaProgressUser(jid) {
 // jumlahKartu: default 1 (satu kartu terkirim). Lapor by-ayat mengisi selisih posisi
 // supaya lompatan beberapa halaman tidak cuma dihitung 1.
 function catatLogBacaanHarian(userJid, tanggalLog, bacaanId, suratAyat, statusPace, jumlahKartu = 1) {
-  const tambah = Number.isInteger(jumlahKartu) && jumlahKartu > 0 ? jumlahKartu : 1;
+  // 0 diperbolehkan: laporan yang tidak memajukan posisi (ulang ayat sama) hanya memperbarui
+  // label tanpa menambah kredit target harian.
+  const tambah = Number.isInteger(jumlahKartu) && jumlahKartu >= 0 ? jumlahKartu : 1;
   const existing = db
     .prepare('SELECT * FROM log_bacaan_harian WHERE user_jid = ? AND tanggal = ?')
     .get(userJid, tanggalLog);
@@ -738,6 +784,24 @@ function catatLogBacaanHarian(userJid, tanggalLog, bacaanId, suratAyat, statusPa
       SET bacaan_id_akhir = ?, surat_ayat_akhir = ?, jumlah_kartu = jumlah_kartu + ?, status_pace_akhir = ?
       WHERE user_jid = ? AND tanggal = ?
     `).run(bacaanId, suratAyat, tambah, statusPace || null, userJid, tanggalLog);
+  }
+}
+
+// KOREKSI (bukan tambah): timpa posisi/label catatan di tanggal tertentu tanpa mengubah
+// jumlah_kartu yang ada. Kalau barisnya belum ada, dibuat dengan jumlah_kartu 1.
+function setLogBacaanHarian(userJid, tanggalLog, bacaanId, suratAyat) {
+  const existing = db
+    .prepare('SELECT id FROM log_bacaan_harian WHERE user_jid = ? AND tanggal = ?')
+    .get(userJid, tanggalLog);
+  if (!existing) {
+    db.prepare(`
+      INSERT INTO log_bacaan_harian (user_jid, tanggal, bacaan_id_awal, bacaan_id_akhir, surat_ayat_akhir, jumlah_kartu)
+      VALUES (?, ?, ?, ?, ?, 1)
+    `).run(userJid, tanggalLog, bacaanId, bacaanId, suratAyat);
+  } else {
+    db.prepare(`
+      UPDATE log_bacaan_harian SET bacaan_id_akhir = ?, surat_ayat_akhir = ? WHERE user_jid = ? AND tanggal = ?
+    `).run(bacaanId, suratAyat, userJid, tanggalLog);
   }
 }
 
@@ -778,6 +842,23 @@ function getLogBacaanHarianRange(userJid, tanggalMulaiISO, tanggalSelesaiISO) {
       ORDER BY tanggal ASC
     `)
     .all(userJid, tanggalMulaiISO, tanggalSelesaiISO);
+}
+
+// Rata-rata capaian target harian di rentang tanggal (inklusif): jumlah_kartu per hari vs target
+// harian user, tiap hari di-cap 100%, hari tanpa log = 0%. Hari sebelum user mulai baca tidak
+// dihitung. null kalau user tak punya target valid.
+function hitungPersenMingguan(jid, tanggalMulaiISO, tanggalSelesaiISO) {
+  const user = getUser(jid);
+  const target = hitungTargetHarian(user.target_juz_per_hari);
+  if (!target || target <= 0) return null;
+  let awal = tanggalMulaiISO;
+  if (user.tanggal_mulai_baca && user.tanggal_mulai_baca > awal) awal = user.tanggal_mulai_baca;
+  const jumlahHari = selisihHariISO(awal, tanggalSelesaiISO) + 1;
+  if (jumlahHari <= 0) return null;
+  const logs = getLogBacaanHarianRange(jid, awal, tanggalSelesaiISO);
+  let total = 0;
+  for (const l of logs) total += Math.min(1, (l.jumlah_kartu || 0) / target);
+  return Math.round((total / jumlahHari) * 100);
 }
 
 // Anggota grup yang DI_BAWAH_PACE hari ini -- basis tawaran "lelang" pas Isya (poin 1).
@@ -1020,6 +1101,15 @@ module.exports = {
   hitungSisaProgressUser,
   hitungHalamanDitempuhDenganWrap,
   sudahKhatamSetelahWrap,
+  sudahKhatamSetelahKirim,
+  hitungTargetHarian,
+  hitungPersenMingguan,
+  setLogBacaanHarian,
+  JUMLAH_HALAMAN_MUSHAF,
+  kartuPerHalaman,
+  kartuKeHalaman,
+  halamanKeKartu,
+  bulatkanHalaman,
 
   // groups - phase 3 (sosial)
   getOrCreateGroup,

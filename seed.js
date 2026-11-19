@@ -7,6 +7,8 @@ const { insertBacaan, countBacaan, db } = require('./db');
 // per waktu sholat. Sumber: sheet "Ikut Ayat dan Waqaf" + "Ayat Terpotong"
 // dari file Pemetaan_Mushaf_Madinah_3_Bagian_per_Halaman.xlsx.
 //
+// CATATAN: skrip ini butuh paket "xlsx" yang SENGAJA tidak ada di package.json (bot tidak memakainya,
+// dan menambahkannya bisa membuat npm ci tidak sinkron). Pasang sementara: npm i --no-save xlsx
 // Jalankan: node seed_bacaan.js /path/ke/Pemetaan_Mushaf_Madinah_3_Bagian_per_Halaman.xlsx
 // (atau taruh file itu satu folder dengan script ini dan jalankan tanpa argumen)
 // ======================================================================

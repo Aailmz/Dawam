@@ -69,68 +69,13 @@ Balas HANYA dengan isi pesannya saja, tanpa tanda kutip, tanpa penjelasan tambah
 
 
 
-async function generateFallbackChat(namaUser, pesanUser) {
-  const prompt = `${namaUser ? namaUser : 'Seseorang'} baru saja mengirim SATU pesan ini ke kamu (Dawam) di WhatsApp, di luar konteks flow yang biasa (bukan jawaban ya/nanti untuk ajakan tilawah):
-
-"${pesanUser}"
-
-Balas HANYA pesan di atas secara natural dan hangat sesuai karaktermu, sebagai balasan baru yang relevan dengan isi pesan tersebut. JANGAN mengulang, menggemakan, atau merujuk ke pesan-pesan sebelumnya di luar yang dikutip di atas -- anggap ini satu pesan berdiri sendiri. Jika pesannya berupa sapaan ringan, tanggapi singkat dan ramah. Jika tidak relevan sama sekali dengan ibadah, tetap balas sopan dan boleh arahkan kembali ke topik shalat/tilawah jika pas, tanpa memaksa.
-Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
-
-  return await callGroqText(prompt, 300);
-}
-
 
 // ========== FUNGSI BARU PHASE 2: GENERATE PESAN ==========
 
 
-/**
- * Tawaran lanjut baca dalam sesi yang sama, untuk user dengan target 3/1 hari per juz (§4.3).
- */
-async function generateTawaranLanjutSesi(namaUser, targetJuzPerHari) {
-  const prompt = `${namaUser} punya target khatam 1 juz per ${targetJuzPerHari} hari, dan baru saja selesai membaca satu kartu bacaan. Berdasarkan progressnya, dia masih di bawah pace target untuk hari ini.
-Buatkan SATU pesan singkat (2-3 kalimat) menyemangati dan menanyakan apakah dia mau lanjut membaca kartu berikutnya sekarang juga, atau cukup dulu untuk saat ini.
-Minta dia membalas dengan kata sederhana seperti "ya"/"lanjut" atau "cukup"/"nanti".
-Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
-  return await callGroqText(prompt);
-}
 
-/**
- * Pesan saat user SUDAH mencapai/melampaui pace target hari ini (lawan dari
- * generateTawaranLanjutSesi). Dikirim supaya user tidak dibiarkan diam tanpa kabar.
- */
-async function generateSudahCapaiPace(namaUser, targetJuzPerHari) {
-  const prompt = `${namaUser} baru saja selesai membaca, dan progressnya sudah mencapai atau melampaui target pace hari ini (target: 1 juz per ${targetJuzPerHari} hari, sekarang sudah 100% dari target harian).
-Buatkan SATU pesan singkat (2-3 kalimat) yang hangat, memberi selamat/apresiasi jelas atas pencapaian 100% target hari ini, sebut namanya. PENTING: pastikan dia benar-benar tahu/sadar bahwa dia SUDAH mencapai target hari ini (jangan cuma tersirat, sebutkan eksplisit semacam "udah 100% target hari ini" atau "target hari ini udah kelar").
-Setelah itu, tetap tanyakan apakah dia mau lanjut baca kartu berikutnya (bonus, di luar target) atau cukup dulu untuk sesi ini. JANGAN mengasumsikan dia mau berhenti -- ini cuma info + tawaran, bukan penutupan sesi.
-Minta dia membalas dengan kata sederhana seperti "ya"/"lanjut" atau "cukup"/"nanti".
-Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
 
-  return await callGroqText(prompt, 350);
-}
-
-/**
- * Penutup sesi singkat untuk target pace normal (6 hari/juz), setelah selesai baca/terjemah.
- */
-async function generatePenutupSesiBiasa(namaUser) {
-  const prompt = `${namaUser} baru saja selesai sesi tilawahnya untuk waktu sholat ini (pace normal, tidak ada target kecepatan khusus).
-Buatkan SATU pesan penutup singkat (1-2 kalimat) yang hangat, sebut namanya, mengucapkan semoga menjadi amal baik, dan beri tahu akan ditemani lagi di waktu sholat berikutnya.
-Balas HANYA dengan isi pesannya saja, tanpa tanda kutip.`;
-
-  return await callGroqText(prompt, 250);
-}
-
-/**
- * Reminder balik ke target asli kalau user berhenti sebelum capai pace (§4.4).
- */
-async function generateIngatkanTargetAsli(namaUser, targetJuzPerHari) {
-  const prompt = `Ingatkan ${namaUser} dengan nada hangat, TIDAK menghakimi, bahwa target khatamnya adalah 1 juz per ${targetJuzPerHari} hari.
-Ajak dia untuk coba kejar progress itu lagi di waktu sholat berikutnya. Jangan buat dia merasa bersalah.
-Balas HANYA dengan isi pesannya saja (SATU pesan singkat, 2-3 kalimat), tanpa tanda kutip.`;
-
-  return await callGroqText(prompt);
-}
 
 /**
  * Tawaran mode terjemah-saja untuk halangan, dikirim saat mencapai 3x tidak baca
@@ -450,15 +395,10 @@ module.exports = {
   hapusDashTerlarang,
   generateReminderSholat,
   generateTawaranNgaji,
-  generateFallbackChat,
   parseIntentJawaban,
 
   // phase 2 - generate
   generateTawaranNgajiUntukP,
-  generateTawaranLanjutSesi,
-  generateSudahCapaiPace,
-  generatePenutupSesiBiasa,
-  generateIngatkanTargetAsli,
   generateTawaranModeHalangan,
   generatePesanSetelah3xTidakBaca,
 

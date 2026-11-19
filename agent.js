@@ -29,7 +29,12 @@ const { hapusDashTerlarang } = require('./groq');
  * @param {object} konteks - { jid, groupJid?, kirimBacaan?, ... } untuk eksekutor
  * @returns {{ jawabanFinal: string|null, error: string|null }}
  */
+let counterGiliran = 0;
+
 async function jalankanAgentDawam({ systemPrompt, tools, historiChat, pesanBaru, eksekutorTools, konteks }) {
+  // Penanda "giliran" (satu pesan user = satu giliran). Dipakai tools.js untuk memastikan konfirmasi
+  // dua langkah datang dari pesan user yang berbeda, bukan AI yang memanggil ulang sendiri.
+  if (konteks) konteks.giliranId = ++counterGiliran;
   const messages = [
     { role: 'system', content: systemPrompt },
     ...historiChat,

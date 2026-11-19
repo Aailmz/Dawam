@@ -1,5 +1,33 @@
 const db = require('./db');
 
+// Cooldown in-memory untuk tool yang menulis ke grup, supaya satu orang tidak bisa membuat bot
+// spam grup. cekCooldown = sisa ms (0 kalau boleh); tandaiCooldown dipanggil SETELAH berhasil kirim.
+const terakhirDipakai = new Map();
+function cekCooldown(kunci, jedaMs) {
+  const sisa = (terakhirDipakai.get(kunci) || 0) + jedaMs - Date.now();
+  return sisa > 0 ? sisa : 0;
+}
+function tandaiCooldown(kunci) {
+  terakhirDipakai.set(kunci, Date.now());
+}
+const COOLDOWN_REKAP_MS = 10 * 60 * 1000;
+const COOLDOWN_TAG_MS = 3 * 60 * 1000;
+const COOLDOWN_BROADCAST_MS = 60 * 1000;
+
+// Laporan/koreksi yang melompat jauh butuh DUA panggilan dengan argumen sama pada giliran (pesan
+// user) yang BERBEDA, supaya "konfirmasi" benar-benar datang dari user, bukan AI memanggil ulang
+// sendiri. (Dulu tool menolak terus walau user sudah mengonfirmasi.)
+const MASA_KONFIRMASI_MS = 10 * 60 * 1000;
+const laporMenunggu = new Map(); // jid -> { urutan, sampai, giliranId }
+const koreksiMenunggu = new Map(); // jid -> { urutan, sampai, giliranId }
+function sudahDikonfirmasi(peta, jid, urutan, giliranId) {
+  const m = peta.get(jid);
+  const valid = m && m.urutan === urutan && m.sampai >= Date.now() && m.giliranId !== giliranId;
+  if (valid) peta.delete(jid);
+  else peta.set(jid, { urutan, sampai: Date.now() + MASA_KONFIRMASI_MS, giliranId });
+  return !!valid;
+}
+
 // ========== SCHEMA — PERSONAL ==========
 
 const TOOLS_PERSONAL = [
@@ -385,12 +413,13 @@ const TOOLS_GRUP = [
 // kirimBacaanLanjutan/kirimTerjemahBacaan adalah callback dari index.js (butuh akses sock),
 // sama pola dengan konteks.kirimPesan di Harga Petani.
 
-async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
+async function eksekusiLaporBacaanManual(args, konteks) {
+  const jumlah_halaman = Number(args.jumlah_halaman);
   const user = db.getUser(konteks.jid);
   const modeKartu = user.bentuk_bacaan !== 'reminder';
   const gapHari = hitungGapHariTanpaLapor(konteks.jid);
 
-  if (typeof jumlah_halaman !== 'number' || jumlah_halaman <= 0 || jumlah_halaman > 60) {
+  if (!Number.isFinite(jumlah_halaman) || jumlah_halaman <= 0 || jumlah_halaman > 60) {
     const sisa = db.hitungSisaProgressUser(konteks.jid);
     return {
       sukses: false,
@@ -404,7 +433,8 @@ async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
   // supaya user tidak bisa lapor "20 halaman" berkali-kali jadi ratusan dalam sehari.
   const hariIniISO = db.tanggalHariIniISO();
   const logHariIni = db.getLogBacaanHarianByTanggal(konteks.jid, hariIniISO);
-  const sudahDilaporkanHariIni = logHariIni?.jumlah_kartu || 0;
+  // Log menyimpan KARTU; batas wajar & angka ke user dalam HALAMAN mushaf.
+  const sudahDilaporkanHariIni = db.bulatkanHalaman(db.kartuKeHalaman(logHariIni?.jumlah_kartu || 0));
   const totalSetelahIni = sudahDilaporkanHariIni + jumlah_halaman;
 
   const BATAS_WAJAR_PER_HARI = 60; // ~2 juz, batas atas yang masih masuk akal untuk 1 hari
@@ -418,7 +448,9 @@ async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
     };
   }
 
-  db.catatLaporanBacaanManual(konteks.jid, hariIniISO, jumlah_halaman);
+  // Laporan user dalam halaman mushaf -> disimpan sebagai kartu (1 halaman = beberapa kartu),
+  // supaya sebanding dengan kartu yang dikirim bot dan dengan target harian.
+  db.catatLaporanBacaanManual(konteks.jid, hariIniISO, db.halamanKeKartu(jumlah_halaman));
   db.setTanggalTerakhirBaca(konteks.jid, hariIniISO);
   // Tanpa ini user yang cuma lapor manual dianggap "tanpa target" (persen rekap tidak terhitung).
   db.pastikanTanggalMulaiBaca(konteks.jid, hariIniISO);
@@ -444,7 +476,8 @@ async function eksekusiLaporBacaanManual({ jumlah_halaman }, konteks) {
   };
 }
 
-async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
+async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat: nomorAyatMentah }, konteks) {
+  const nomor_ayat = Math.trunc(Number(nomorAyatMentah)); // LLM kadang mengirim string
   const user = db.getUser(konteks.jid);
   const modeKartu = user.bentuk_bacaan !== 'reminder';
   const gapHari = hitungGapHariTanpaLapor(konteks.jid);
@@ -466,17 +499,19 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
   // kasih kesempatan AI konfirmasi dulu ke user.
   const selisihUrutan = bacaanDitemukan.urutan - (posisiSebelumnya?.urutan || 0);
   const mundurSignifikan = selisihUrutan < -3; // toleransi kecil, bisa aja emang mau ulang ayat dikit
-  const majuTerlaluJauh = selisihUrutan > 10; // diperketat: loncat >10 kartu kecil dalam sekali lapor dianggap perlu konfirmasi
+  // Batas "terlalu jauh" = kira-kira lebih dari 1 juz (20 halaman mushaf) dalam sekali lapor.
+  const majuTerlaluJauh = selisihUrutan > Math.max(10, Math.round(db.kartuPerHalaman() * 20));
 
-  if ((mundurSignifikan || majuTerlaluJauh) && posisiSebelumnya) {
+  if ((mundurSignifikan || majuTerlaluJauh) && posisiSebelumnya &&
+      !sudahDikonfirmasi(laporMenunggu, konteks.jid, bacaanDitemukan.urutan, konteks.giliranId)) {
     return {
       sukses: false,
       butuh_konfirmasi: true,
       posisi_sebelumnya: posisiSebelumnya.surat_ayat,
       posisi_yang_dilaporkan: bacaanDitemukan.surat_ayat,
       catatan_untuk_ai: mundurSignifikan
-        ? `User sebelumnya di posisi "${posisiSebelumnya.surat_ayat}", tapi laporan baru ini (${bacaanDitemukan.surat_ayat}) keliatan MUNDUR jauh dari situ. JANGAN langsung catat. Tanya balik ke user dengan natural untuk konfirmasi -- apakah dia emang mau ulang baca dari situ, atau salah sebut ayat/surat.`
-        : `User sebelumnya di posisi "${posisiSebelumnya.surat_ayat}", tapi laporan baru ini (${bacaanDitemukan.surat_ayat}) keliatan LONCAT TERLALU JAUH (lebih dari sekitar 1 juz dalam sekali lapor). JANGAN langsung catat. Tanya balik ke user dengan natural untuk konfirmasi, kali aja salah sebut nomor ayat atau emang udah baca banyak sekaligus.`,
+        ? `User sebelumnya di posisi "${posisiSebelumnya.surat_ayat}", tapi laporan baru ini (${bacaanDitemukan.surat_ayat}) keliatan MUNDUR jauh dari situ. JANGAN langsung catat. Tanya balik ke user dengan natural untuk konfirmasi -- apakah dia emang mau ulang baca dari situ, atau salah sebut ayat/surat. Kalau user sudah menjawab tegas bahwa benar, panggil ulang tool ini dengan argumen yang SAMA (jangan panggil lagi sebelum user menjawab).`
+        : `User sebelumnya di posisi "${posisiSebelumnya.surat_ayat}", tapi laporan baru ini (${bacaanDitemukan.surat_ayat}) keliatan LONCAT TERLALU JAUH (lebih dari sekitar 1 juz dalam sekali lapor). JANGAN langsung catat. Tanya balik ke user dengan natural untuk konfirmasi, kali aja salah sebut nomor ayat atau emang udah baca banyak sekaligus. Kalau user sudah menjawab tegas bahwa benar, panggil ulang tool ini dengan argumen yang SAMA (jangan panggil lagi sebelum user menjawab).`,
     };
   }
 
@@ -493,7 +528,9 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat }, konteks) {
   // ini dihitung dari jumlah_kartu di log_bacaan_harian). Jumlah kartu = berapa kartu
   // yang maju dari posisi sebelumnya (bukan selalu 1), minimal 1. Kalau belum ada posisi
   // sebelumnya, tidak ada pembanding yang bisa dipercaya, jadi dihitung 1.
-  const jumlahKartuBaru = posisiSebelumnya && selisihUrutan > 0 ? selisihUrutan : 1;
+  // Tidak maju (ulang ayat yang sama / mundur sedikit) = kredit 0, supaya mengulang laporan yang
+  // sama tidak menaikkan persen harian. Posisi pertama kali (belum ada pembanding) dihitung 1.
+  const jumlahKartuBaru = !posisiSebelumnya ? 1 : Math.max(0, selisihUrutan);
   db.catatLogBacaanHarian(konteks.jid, hariIniISO, bacaanDitemukan.urutan, bacaanDitemukan.surat_ayat, null, jumlahKartuBaru);
 
   const sisa = db.hitungSisaProgressUser(konteks.jid);
@@ -527,6 +564,28 @@ async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_a
     };
   }
 
+  // Koreksi yang memindahkan POSISI jauh butuh konfirmasi kedua (lihat koreksiMenunggu).
+  const mempengaruhiPosisi =
+    jenis_koreksi === 'posisi_sekarang' ||
+    (jenis_koreksi === 'log_tanggal_tertentu' && tanggal_relatif === 'hari_ini');
+  if (mempengaruhiPosisi) {
+    const posisiSaatIni = db.getUser(konteks.jid).last_sent_bacaan_id || 0;
+    const lompat = Math.abs(bacaanDitemukan.urutan - posisiSaatIni);
+    const batasLompat = Math.round(db.kartuPerHalaman() * 20); // ~1 juz
+    if (posisiSaatIni > 0 && lompat > batasLompat) {
+      if (!sudahDikonfirmasi(koreksiMenunggu, konteks.jid, bacaanDitemukan.urutan, konteks.giliranId)) {
+        const posisiLama = db.getBacaanByUrutan(posisiSaatIni);
+        return {
+          sukses: false,
+          butuh_konfirmasi: true,
+          posisi_sekarang: posisiLama?.surat_ayat || null,
+          posisi_diminta: bacaanDitemukan.surat_ayat,
+          catatan_untuk_ai: `Koreksi ini memindahkan posisi bacaan user SANGAT JAUH (dari "${posisiLama?.surat_ayat}" ke "${bacaanDitemukan.surat_ayat}", sekitar ${Math.round(db.kartuKeHalaman(lompat))} halaman) dan BELUM dilakukan. Tanyakan sekali lagi dengan jelas apakah memang posisinya mau dipindah ke situ (bukan salah sebut surat/ayat), dan JANGAN memanggil tool ini lagi sebelum user menjawab tegas. Kalau user menjawab tegas ya, panggil ulang dengan argumen yang SAMA.`,
+        };
+      }
+    }
+  }
+
   // Jejak audit sederhana -- biar kalau ada yang aneh belakangan, bisa ditelusuri siapa
   // yang minta koreksi apa dan kapan. Reuse tabel group_activity_log walau ini personal,
   // dengan jenis khusus biar bisa dibedakan nanti.
@@ -552,7 +611,8 @@ async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_a
     const mundur = mapHari[tanggal_relatif] ?? 0;
     const tanggalISO = db.tanggalMundurISO(mundur);
 
-    db.catatLogBacaanHarian(konteks.jid, tanggalISO, bacaanDitemukan.urutan, bacaanDitemukan.surat_ayat, null);
+    // Koreksi = TIMPA label/posisi catatan tanggal itu (dulu malah menambah +1 kartu).
+    db.setLogBacaanHarian(konteks.jid, tanggalISO, bacaanDitemukan.urutan, bacaanDitemukan.surat_ayat);
 
     // Kalau yang dikoreksi adalah tanggal hari ini, sinkronkan juga posisi utamanya.
     if (mundur === 0) {
@@ -595,7 +655,7 @@ async function eksekusiGetProgressUser(_, konteks) {
     mode_saat_ini: user.mode_baca_arab_saja === 1 ? 'arab' : 'terjemah-saja (halangan)',
     status_pace: sisaProgress.status || null,
     selisih_dari_target: sisaProgress.selisih_tampilan || null,
-    catatan_untuk_ai: 'posisi_terakhir/juz_sekarang cuma LOKASI baca (bisa jadi user memang mulai dari situ, bukan berarti progress banyak). Progress SEBENARNYA ada di halaman_ditempuh (jumlah kartu yang sudah dibaca sejak mulai) dan selisih_dari_target (sudah final, pakai apa adanya, JANGAN dihitung ulang).',
+    catatan_untuk_ai: 'posisi_terakhir/juz_sekarang cuma LOKASI baca (bisa jadi user memang mulai dari situ, bukan berarti progress banyak). Progress SEBENARNYA ada di halaman_ditempuh (jumlah halaman mushaf yang sudah dibaca sejak mulai) dan selisih_dari_target (sudah final, pakai apa adanya, JANGAN dihitung ulang).',
   };
 }
 
@@ -772,11 +832,19 @@ async function eksekusiBroadcastKeGrupSosial({ isi_pesan }, konteks) {
   }
 
   const namaPengirim = user.name || 'Seseorang';
+  if (cekCooldown(`broadcast:${konteks.jid}`, COOLDOWN_BROADCAST_MS) > 0) {
+    return {
+      sukses: false,
+      pesan: 'Baru saja mengirim ke grup.',
+      catatan_untuk_ai: 'User baru saja kirim pesan ke grup beberapa saat lalu. Minta dia tunggu sebentar sebelum kirim lagi supaya grup tidak kebanjiran.',
+    };
+  }
   const terkirim = await konteks.kirimKeGrup(user.group_sosial_jid, `${namaPengirim}: ${isi_pesan}`);
 
   if (!terkirim) {
     return { sukses: false, pesan: 'Gagal mengirim pesan ke grup.' };
   }
+  tandaiCooldown(`broadcast:${konteks.jid}`);
 
   db.catatAktivitasGroup(user.group_sosial_jid, konteks.jid, 'BROADCAST_PERSONAL', isi_pesan.slice(0, 200));
 
@@ -816,7 +884,15 @@ async function eksekusiGetRekapProgressGrup(_, konteks) {
 }
 
 async function eksekusiMintaRekapHarian(_, konteks) {
+  if (cekCooldown(`rekap:${konteks.groupJid}`, COOLDOWN_REKAP_MS) > 0) {
+    return {
+      sukses: false,
+      pesan: 'Rekap harian baru saja dikirim.',
+      catatan_untuk_ai: 'Rekap harian baru saja dikirim ke grup (belum 10 menit). Bilang santai bahwa rekapnya barusan sudah ada di atas, jadi scroll saja dulu.',
+    };
+  }
   const hasil = await konteks.kirimRekapHarian(konteks.groupJid);
+  if (hasil.terkirim) tandaiCooldown(`rekap:${konteks.groupJid}`);
   if (!hasil.terkirim) {
     return {
       sukses: false,
@@ -831,6 +907,13 @@ async function eksekusiMintaRekapHarian(_, konteks) {
 }
 
 async function eksekusiTagAnggotaGrup({ kriteria, nama_target, pesan_pembuka }, konteks) {
+  if (cekCooldown(`tag:${konteks.groupJid}`, COOLDOWN_TAG_MS) > 0) {
+    return {
+      sukses: false,
+      pesan: 'Tag baru saja dikirim.',
+      catatan_untuk_ai: 'Tag ke anggota baru saja dikirim ke grup beberapa menit lalu. Bilang santai agar tunggu sebentar supaya anggota tidak terganggu.',
+    };
+  }
   const dataRekap = db.getRekapProgressGroup(konteks.groupJid);
 
   let targetList;
@@ -869,6 +952,7 @@ async function eksekusiTagAnggotaGrup({ kriteria, nama_target, pesan_pembuka }, 
   if (!terkirim) {
     return { sukses: false, pesan: 'Gagal mengirim tag ke grup.' };
   }
+  tandaiCooldown(`tag:${konteks.groupJid}`);
   return {
     sukses: true,
     jumlah_ditag: jidList.length,
