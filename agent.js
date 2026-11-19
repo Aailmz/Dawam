@@ -12,9 +12,10 @@ const MODEL = process.env.AI_MODEL;
 const MAX_TOOL_ITERATIONS = 6; // +1 cadangan untuk satu kali teguran klaim-tercatat-palsu
 
 // Tool yang benar-benar menulis catatan bacaan ke log harian.
-const NAMA_TOOL_PENCATAT = ['lapor_bacaan_manual', 'lapor_bacaan_by_ayat', 'koreksi_catatan_bacaan', 'kirim_bacaan_lanjutan'];
+// Termasuk pencatat feedback power user, supaya "feedback sudah tercatat" setelah tool sukses tidak ditegur.
+const NAMA_TOOL_PENCATAT = ['lapor_bacaan_manual', 'lapor_bacaan_by_ayat', 'koreksi_catatan_bacaan', 'kirim_bacaan_lanjutan', 'kirim_feedback_dawam', 'ubah_feedback_dawam'];
 // Tool baca: kalau dipanggil, kata "tercatat" di jawaban kemungkinan cuma menyebut data lama.
-const NAMA_TOOL_BACA = ['get_progress_user', 'tanya_bacaan_hari_lain', 'get_rekap_progress_grup', 'get_pengaturan_user'];
+const NAMA_TOOL_BACA = ['get_progress_user', 'tanya_bacaan_hari_lain', 'get_rekap_progress_grup', 'get_pengaturan_user', 'get_feedback_saya'];
 // Klaim bentuk lampau "sudah dicatat" -- sengaja tidak menangkap "nanti aku catat" (rencana).
 const POLA_KLAIM_TERCATAT = /\b(?:sudah|udah|telah|berhasil)\s+(?:(?:aku|ku|dawam)\s*)?(?:di)?catat|(?<!nanti\s|akan\s|mau\s)\baku\s+catat|\btercatat\b|\bdicatat\b|\bkucatat\b/i;
 const { hapusDashTerlarang } = require('./groq');
@@ -91,8 +92,8 @@ async function jalankanAgentDawam({ systemPrompt, tools, historiChat, pesanBaru,
         messages.push({
           role: 'user',
           content:
-            '[PESAN SISTEM, bukan dari user] Jawabanmu barusan menyiratkan laporan bacaan sudah dicatat, padahal TIDAK ADA tool pencatat (lapor_bacaan_by_ayat / lapor_bacaan_manual) yang berhasil dipanggil di giliran ini, jadi belum tercatat apa-apa. ' +
-            'Kalau user SUDAH menyebut dengan jelas angka halaman atau surat+ayat dan sudah menyetujui rentangnya, PANGGIL tool yang sesuai SEKARANG. ' +
+            '[PESAN SISTEM, bukan dari user] Jawabanmu barusan menyiratkan laporan bacaan atau feedback sudah dicatat, padahal TIDAK ADA tool pencatat (lapor_bacaan_by_ayat / lapor_bacaan_manual / kirim_feedback_dawam) yang berhasil dipanggil di giliran ini, jadi belum tercatat apa-apa. ' +
+            'Kalau user SUDAH menyebut dengan jelas angka halaman atau surat+ayat dan sudah menyetujui rentangnya (atau, untuk power user, masukannya sudah jelas), PANGGIL tool yang sesuai SEKARANG. ' +
             'Kalau rentangnya belum dikonfirmasi atau belum jelas, tulis ulang jawabanmu: tanyakan konfirmasi/angkanya dan JANGAN bilang sudah/akan tercatat. Jangan menyebut pesan sistem ini ke user.',
         });
         continue;

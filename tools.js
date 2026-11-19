@@ -1,4 +1,5 @@
 const db = require('./db');
+const power = require('./power');
 
 // Cooldown in-memory untuk tool yang menulis ke grup, supaya satu orang tidak bisa membuat bot
 // spam grup. cekCooldown = sisa ms (0 kalau boleh); tandaiCooldown dipanggil SETELAH berhasil kirim.
@@ -294,6 +295,62 @@ const TOOLS_PERSONAL = [
     },
   },
 ];
+
+// ========== SCHEMA — POWER USER (hanya diberikan ke power user, lihat toolsPersonalUntuk) ==========
+
+const TOOLS_POWER = [
+  {
+    type: 'function',
+    function: {
+      name: 'kirim_feedback_dawam',
+      description: 'Catat masukan/feedback dari Power User tentang Dawam (laporan bug/error, usul fitur, keluhan, ide perbaikan) supaya diteruskan ke tim pengembang. WAJIB dipanggil kalau power user menyampaikan masukan yang sudah jelas; tanpa pemanggilan tool ini masukannya TIDAK tersimpan. Kalau masukannya masih kabur atau kamu ragu ini masukan atau obrolan biasa, tanya dulu ke user sebelum memanggil.',
+      parameters: {
+        type: 'object',
+        properties: {
+          isi: {
+            type: 'string',
+            description: 'Isi masukan sesuai maksud user, dengan semua detail yang dia sebut (apa yang terjadi, apa yang diharapkan, contohnya). Boleh menggabungkan beberapa pesan terakhirnya. Jangan menambah hal yang tidak dia katakan.',
+          },
+          kategori: {
+            type: 'string',
+            enum: ['BUG', 'SARAN', 'KELUHAN', 'LAIN'],
+            description: 'BUG = ada yang error/salah/tidak jalan. SARAN = usul fitur atau perbaikan. KELUHAN = tidak nyaman/kurang puas tanpa permintaan spesifik. LAIN = selain itu.',
+          },
+        },
+        required: ['isi', 'kategori'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'ubah_feedback_dawam',
+      description: 'Ubah/lengkapi isi feedback MILIK USER INI yang barusan dicatat, kalau dia mengoreksi atau menambah detail. Hanya berhasil selama feedback belum diteruskan ke tim; kalau gagal karena sudah diteruskan, catat sebagai feedback baru lewat kirim_feedback_dawam.',
+      parameters: {
+        type: 'object',
+        properties: {
+          id: { type: 'integer', description: 'Nomor feedback (yang kamu sebut ke user saat mencatat, tanpa tanda #).' },
+          isi_baru: { type: 'string', description: 'Isi feedback LENGKAP setelah diperbarui (bukan hanya tambahannya).' },
+          kategori: { type: 'string', enum: ['BUG', 'SARAN', 'KELUHAN', 'LAIN'], description: 'Isi hanya kalau kategorinya perlu diganti.' },
+        },
+        required: ['id', 'isi_baru'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_feedback_saya',
+      description: 'Ambil daftar feedback terakhir milik user ini beserta statusnya (menunggu diteruskan / sudah diteruskan ke tim / sudah dikerjakan). Panggil kalau user tanya soal status masukannya ("udah sampai belum", "yang kemarin gimana"). Jangan mengarang status.',
+      parameters: { type: 'object', properties: {}, required: [] },
+    },
+  },
+];
+
+// Tool power hanya ikut diberikan ke power user (operator termasuk). User biasa tidak melihatnya.
+function toolsPersonalUntuk(jid) {
+  return power.isPowerUser(jid) ? [...TOOLS_PERSONAL, ...TOOLS_POWER] : TOOLS_PERSONAL;
+}
 
 // ========== SCHEMA — GRUP ==========
 // Grup TIDAK PERNAH dapat tool kirim bacaan.
@@ -851,7 +908,100 @@ async function eksekusiBroadcastKeGrupSosial({ isi_pesan }, konteks) {
   return { sukses: true, catatan_untuk_ai: 'Pesan berhasil dikirim ke grup sosial. Beri tahu user singkat bahwa sudah terkirim.' };
 }
 
+// ---- Power user: feedback ke tim ----
+
+const LABEL_STATUS_FEEDBACK = {
+  PENDING: 'menunggu diteruskan ke tim',
+  TERKIRIM: 'sudah diteruskan ke tim, belum dikerjakan',
+  SELESAI: 'sudah dikerjakan',
+};
+
+function tolakBukanPowerUser() {
+  return {
+    sukses: false,
+    pesan: 'User ini bukan Power User.',
+    catatan_untuk_ai: 'Fitur feedback ke tim hanya untuk Power User. Jangan menjanjikan masukan ini akan sampai ke tim. Tanggapi natural, boleh bilang idenya bagus dan akan ditampung, tanpa janji apapun.',
+  };
+}
+
+async function eksekusiKirimFeedbackDawam({ isi, kategori }, konteks) {
+  if (!power.isPowerUser(konteks.jid)) return tolakBukanPowerUser();
+
+  const teks = String(isi ?? '').trim();
+  if (teks.length < 8) {
+    return { sukses: false, pesan: 'Isi masukan terlalu singkat.', catatan_untuk_ai: 'Isi masukannya belum cukup jelas untuk dicatat. Tanya user dengan natural apa yang terjadi / apa yang dia harapkan, baru catat setelah jelas.' };
+  }
+  if (teks.length > power.BATAS_PANJANG_FEEDBACK) {
+    return { sukses: false, pesan: 'Isi masukan terlalu panjang.', catatan_untuk_ai: `Isi masukan melebihi ${power.BATAS_PANJANG_FEEDBACK} karakter. Ringkas dulu intinya (tetap pertahankan detail penting) lalu panggil ulang.` };
+  }
+
+  const sama = db.cariFeedbackPendingSama(konteks.jid, teks);
+  if (sama) {
+    return { sukses: true, id: sama, sudah_ada: true, catatan_untuk_ai: `Masukan yang sama persis sudah tercatat sebagai #${sama}. Beri tahu user itu sudah tercatat, jangan dicatat ulang.` };
+  }
+
+  if (db.hitungFeedbackPowerHariIni(konteks.jid) >= power.BATAS_FEEDBACK_PER_HARI) {
+    return { sukses: false, pesan: 'Batas harian tercapai.', catatan_untuk_ai: `User sudah mengirim ${power.BATAS_FEEDBACK_PER_HARI} masukan hari ini, batas harian tercapai. Sampaikan dengan lembut, minta lanjut besok, dan terima kasih atas semangatnya.` };
+  }
+
+  const id = db.simpanFeedbackPower(konteks.jid, teks, kategori);
+  return {
+    sukses: true,
+    id,
+    kategori: db.KATEGORI_FEEDBACK.includes(kategori) ? kategori : 'LAIN',
+    catatan_untuk_ai: `Tercatat sebagai feedback #${id}. Sebutkan singkat apa yang dicatat beserta nomor #${id}, bilang masukan dikumpulkan lalu diteruskan ke tim, dan dia akan dikabari kalau sudah dikerjakan. JANGAN menjanjikan kapan atau apakah pasti dikerjakan.`,
+  };
+}
+
+async function eksekusiUbahFeedbackDawam({ id, isi_baru, kategori }, konteks) {
+  if (!power.isPowerUser(konteks.jid)) return tolakBukanPowerUser();
+
+  const nomor = Math.trunc(Number(id));
+  const teks = String(isi_baru ?? '').trim();
+  if (teks.length < 8 || teks.length > power.BATAS_PANJANG_FEEDBACK) {
+    return { sukses: false, pesan: 'Isi baru tidak valid.', catatan_untuk_ai: `Isi feedback harus 8 sampai ${power.BATAS_PANJANG_FEEDBACK} karakter dan lengkap. Perbaiki lalu panggil ulang, atau tanya user.` };
+  }
+
+  if (db.ubahFeedbackPending(nomor, konteks.jid, teks, kategori)) {
+    return { sukses: true, id: nomor, catatan_untuk_ai: `Feedback #${nomor} berhasil diperbarui. Konfirmasi singkat ke user.` };
+  }
+
+  const ada = db.getFeedbackPower(nomor);
+  if (!ada || ada.user_jid !== konteks.jid) {
+    return { sukses: false, pesan: 'Feedback tidak ditemukan.', catatan_untuk_ai: `Tidak ada feedback #${nomor} milik user ini. Cek nomornya lewat get_feedback_saya kalau perlu.` };
+  }
+  return {
+    sukses: false,
+    pesan: 'Feedback sudah diteruskan ke tim.',
+    catatan_untuk_ai: `Feedback #${nomor} sudah diteruskan ke tim jadi tidak bisa diubah lagi. Tawarkan untuk mencatat tambahan/koreksinya sebagai feedback baru lewat kirim_feedback_dawam (sebut bahwa ini lanjutan dari #${nomor}).`,
+  };
+}
+
+async function eksekusiGetFeedbackSaya(_, konteks) {
+  if (!power.isPowerUser(konteks.jid)) return tolakBukanPowerUser();
+  const daftar = db.getFeedbackPowerUser(konteks.jid, 10);
+  if (daftar.length === 0) {
+    return { sukses: true, jumlah: 0, catatan_untuk_ai: 'User ini belum pernah mengirim feedback.' };
+  }
+  return {
+    sukses: true,
+    jumlah: daftar.length,
+    feedback: daftar.map((f) => ({
+      id: f.id,
+      tanggal: f.tanggal,
+      kategori: f.kategori,
+      isi: f.isi_asli.length > 200 ? `${f.isi_asli.slice(0, 200)}...` : f.isi_asli,
+      status: LABEL_STATUS_FEEDBACK[f.status] || f.status,
+      catatan_tim: f.catatan_selesai || null,
+    })),
+    catatan_untuk_ai: 'Ringkas status feedback ini apa adanya sesuai field status. Jangan mengarang perkiraan waktu pengerjaan.',
+  };
+}
+
 const EKSEKUTOR_PERSONAL = {
+  kirim_feedback_dawam: eksekusiKirimFeedbackDawam,
+  ubah_feedback_dawam: eksekusiUbahFeedbackDawam,
+  get_feedback_saya: eksekusiGetFeedbackSaya,
   get_progress_user: eksekusiGetProgressUser,
   get_info_mushaf: eksekusiGetInfoMushaf,
   kirim_bacaan_lanjutan: eksekusiKirimBacaanLanjutan,
@@ -1029,6 +1179,8 @@ const EKSEKUTOR_GRUP = {
 
 module.exports = {
   TOOLS_PERSONAL,
+  TOOLS_POWER,
+  toolsPersonalUntuk,
   TOOLS_GRUP,
   EKSEKUTOR_PERSONAL,
   EKSEKUTOR_GRUP,
