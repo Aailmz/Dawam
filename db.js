@@ -152,6 +152,44 @@ db.exec(`
   )
 `);
 
+// ========== POWER USER (feedback ke tim development) ==========
+// Hanya tabel BARU (IF NOT EXISTS): aman dijalankan di DB produksi, tidak menyentuh data lama.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS power_users (
+    jid TEXT PRIMARY KEY,
+    ditambahkan_oleh TEXT,
+    waktu TEXT DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS feedback_power (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_jid TEXT NOT NULL,
+    isi_asli TEXT NOT NULL,           -- kalimat user apa adanya (tidak pernah ditimpa)
+    isi_rapi TEXT,                    -- versi rapi buat operator, diisi saat digest dibuat
+    kategori TEXT NOT NULL DEFAULT 'LAIN',   -- BUG | SARAN | KELUHAN | LAIN
+    status TEXT NOT NULL DEFAULT 'PENDING',  -- PENDING | TERKIRIM | SELESAI
+    tanggal TEXT NOT NULL,            -- YYYY-MM-DD WIB, buat batas harian
+    waktu TEXT DEFAULT CURRENT_TIMESTAMP,
+    dikirim_pada TEXT,                -- masuk digest operator
+    selesai_pada TEXT,
+    catatan_selesai TEXT,
+    user_diberitahu_pada TEXT         -- user sudah dikabari kalau feedback-nya selesai
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_feedback_power_status ON feedback_power (status, id)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_feedback_power_user ON feedback_power (user_jid, id)`);
+
+// Satu baris per hari digest berhasil dikirim, dipakai untuk "susul" kalau bot mati pas jam kirim.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS feedback_digest_log (
+    tanggal TEXT PRIMARY KEY,
+    waktu TEXT DEFAULT CURRENT_TIMESTAMP,
+    jumlah INTEGER
+  )
+`);
+
 // Migrasi: tabel 'ayat' (generic image, Phase 1) sudah digantikan tabel 'bacaan'.
 const tabelLamaMasihAda = db
   .prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name='ayat'`)
@@ -1033,7 +1071,173 @@ function getChatHistory(chatJid, limit = 12) {
   return rows.reverse();
 }
 
+// ========== POWER USER & FEEDBACK ==========
+
+const KATEGORI_FEEDBACK = ['BUG', 'SARAN', 'KELUHAN', 'LAIN'];
+
+function tambahPowerUser(jid, olehJid) {
+  const r = db
+    .prepare('INSERT OR IGNORE INTO power_users (jid, ditambahkan_oleh) VALUES (?, ?)')
+    .run(jid, olehJid || null);
+  return r.changes > 0; // false = sudah power user sebelumnya
+}
+
+function hapusPowerUser(jid) {
+  return db.prepare('DELETE FROM power_users WHERE jid = ?').run(jid).changes > 0;
+}
+
+function isPowerUserDb(jid) {
+  return !!db.prepare('SELECT 1 FROM power_users WHERE jid = ?').get(jid);
+}
+
+function getAllPowerUsers() {
+  return db
+    .prepare(
+      `SELECT p.jid, p.waktu, u.name FROM power_users p
+       LEFT JOIN users u ON u.jid = p.jid ORDER BY p.waktu, p.jid`
+    )
+    .all();
+}
+
+function simpanFeedbackPower(userJid, isi, kategori) {
+  const kat = KATEGORI_FEEDBACK.includes(kategori) ? kategori : 'LAIN';
+  const r = db
+    .prepare('INSERT INTO feedback_power (user_jid, isi_asli, kategori, tanggal) VALUES (?, ?, ?, ?)')
+    .run(userJid, isi, kat, tanggalHariIniISO());
+  return Number(r.lastInsertRowid);
+}
+
+function getFeedbackPower(id) {
+  return db.prepare('SELECT * FROM feedback_power WHERE id = ?').get(id) || null;
+}
+
+function hitungFeedbackPowerHariIni(userJid) {
+  return db
+    .prepare('SELECT COUNT(*) AS n FROM feedback_power WHERE user_jid = ? AND tanggal = ?')
+    .get(userJid, tanggalHariIniISO()).n;
+}
+
+// Feedback PENDING milik user yang isinya sama persis (cegah dobel karena AI memanggil ulang).
+function cariFeedbackPendingSama(userJid, isi) {
+  return (
+    db
+      .prepare("SELECT id FROM feedback_power WHERE user_jid = ? AND status = 'PENDING' AND isi_asli = ?")
+      .get(userJid, isi)?.id ?? null
+  );
+}
+
+// Hanya feedback milik user itu sendiri yang MASIH PENDING (belum masuk digest) yang boleh diubah.
+function ubahFeedbackPending(id, userJid, isiBaru, kategori) {
+  const kat = KATEGORI_FEEDBACK.includes(kategori) ? kategori : null;
+  return (
+    db
+      .prepare(
+        `UPDATE feedback_power SET isi_asli = ?, kategori = COALESCE(?, kategori), isi_rapi = NULL
+         WHERE id = ? AND user_jid = ? AND status = 'PENDING'`
+      )
+      .run(isiBaru, kat, id, userJid).changes > 0
+  );
+}
+
+function getFeedbackPowerPending() {
+  return db
+    .prepare(
+      `SELECT f.*, u.name AS nama FROM feedback_power f
+       LEFT JOIN users u ON u.jid = f.user_jid
+       WHERE f.status = 'PENDING' ORDER BY f.id`
+    )
+    .all();
+}
+
+function getFeedbackPowerUser(userJid, limit = 10) {
+  return db
+    .prepare('SELECT * FROM feedback_power WHERE user_jid = ? ORDER BY id DESC LIMIT ?')
+    .all(userJid, limit)
+    .reverse();
+}
+
+// Daftar untuk operator: yang belum selesai (PENDING + TERKIRIM), terlama dulu.
+function getFeedbackPowerBelumSelesai() {
+  return db
+    .prepare(
+      `SELECT f.*, u.name AS nama FROM feedback_power f
+       LEFT JOIN users u ON u.jid = f.user_jid
+       WHERE f.status != 'SELESAI' ORDER BY f.id`
+    )
+    .all();
+}
+
+function simpanIsiRapiFeedback(id, isiRapi) {
+  db.prepare('UPDATE feedback_power SET isi_rapi = ? WHERE id = ?').run(isiRapi, id);
+}
+
+function tandaiFeedbackTerkirim(ids) {
+  const stmt = db.prepare(
+    "UPDATE feedback_power SET status = 'TERKIRIM', dikirim_pada = ? WHERE id = ? AND status = 'PENDING'"
+  );
+  const now = new Date().toISOString();
+  db.transaction(() => ids.forEach((id) => stmt.run(now, id)))();
+}
+
+// Tandai selesai. Mengembalikan baris yang BARU berubah jadi SELESAI (yang sudah selesai / tidak ada
+// dilewati), lengkap dengan nama user, supaya operator & notifikasi memakai data yang sama.
+function selesaikanFeedbackPower(ids, catatan) {
+  const now = new Date().toISOString();
+  const ambil = db.prepare(
+    `SELECT f.*, u.name AS nama FROM feedback_power f
+     LEFT JOIN users u ON u.jid = f.user_jid WHERE f.id = ?`
+  );
+  const ubah = db.prepare(
+    "UPDATE feedback_power SET status = 'SELESAI', selesai_pada = ?, catatan_selesai = ? WHERE id = ? AND status != 'SELESAI'"
+  );
+  const hasil = [];
+  db.transaction(() => {
+    for (const id of ids) {
+      if (ubah.run(now, catatan || null, id).changes > 0) hasil.push(ambil.get(id));
+    }
+  })();
+  return hasil;
+}
+
+function tandaiUserDiberitahuSelesai(ids) {
+  const stmt = db.prepare('UPDATE feedback_power SET user_diberitahu_pada = ? WHERE id = ?');
+  const now = new Date().toISOString();
+  db.transaction(() => ids.forEach((id) => stmt.run(now, id)))();
+}
+
+function sudahKirimDigestHariIni() {
+  return !!db.prepare('SELECT 1 FROM feedback_digest_log WHERE tanggal = ?').get(tanggalHariIniISO());
+}
+
+function catatDigestTerkirim(jumlah) {
+  db.prepare('INSERT OR REPLACE INTO feedback_digest_log (tanggal, jumlah) VALUES (?, ?)').run(
+    tanggalHariIniISO(),
+    jumlah
+  );
+}
+
 module.exports = {
+  // power user & feedback
+  KATEGORI_FEEDBACK,
+  tambahPowerUser,
+  hapusPowerUser,
+  isPowerUserDb,
+  getAllPowerUsers,
+  simpanFeedbackPower,
+  getFeedbackPower,
+  hitungFeedbackPowerHariIni,
+  cariFeedbackPendingSama,
+  ubahFeedbackPending,
+  getFeedbackPowerPending,
+  getFeedbackPowerUser,
+  getFeedbackPowerBelumSelesai,
+  simpanIsiRapiFeedback,
+  tandaiFeedbackTerkirim,
+  selesaikanFeedbackPower,
+  tandaiUserDiberitahuSelesai,
+  sudahKirimDigestHariIni,
+  catatDigestTerkirim,
+
   // tanggal WIB
   tanggalISO,
   tanggalHariIniISO,
