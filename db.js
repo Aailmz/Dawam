@@ -827,19 +827,26 @@ function catatLogBacaanHarian(userJid, tanggalLog, bacaanId, suratAyat, statusPa
 
 // KOREKSI (bukan tambah): timpa posisi/label catatan di tanggal tertentu tanpa mengubah
 // jumlah_kartu yang ada. Kalau barisnya belum ada, dibuat dengan jumlah_kartu 1.
-function setLogBacaanHarian(userJid, tanggalLog, bacaanId, suratAyat) {
+// Opsional (untuk koreksi eksplisit dari user): jumlahKartu MENIMPA total kartu hari itu (bukan menambah),
+// bacaanIdAwal menimpa titik mulai. Tanpa opsi ini perilakunya tetap: hanya label/posisi akhir.
+function setLogBacaanHarian(userJid, tanggalLog, bacaanId, suratAyat, { jumlahKartu = null, bacaanIdAwal = null } = {}) {
+  const adaJumlah = Number.isInteger(jumlahKartu) && jumlahKartu >= 0;
   const existing = db
     .prepare('SELECT id FROM log_bacaan_harian WHERE user_jid = ? AND tanggal = ?')
     .get(userJid, tanggalLog);
   if (!existing) {
     db.prepare(`
       INSERT INTO log_bacaan_harian (user_jid, tanggal, bacaan_id_awal, bacaan_id_akhir, surat_ayat_akhir, jumlah_kartu)
-      VALUES (?, ?, ?, ?, ?, 1)
-    `).run(userJid, tanggalLog, bacaanId, bacaanId, suratAyat);
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(userJid, tanggalLog, bacaanIdAwal ?? bacaanId, bacaanId, suratAyat, adaJumlah ? jumlahKartu : 1);
   } else {
     db.prepare(`
-      UPDATE log_bacaan_harian SET bacaan_id_akhir = ?, surat_ayat_akhir = ? WHERE user_jid = ? AND tanggal = ?
-    `).run(bacaanId, suratAyat, userJid, tanggalLog);
+      UPDATE log_bacaan_harian
+      SET bacaan_id_akhir = ?, surat_ayat_akhir = ?,
+          jumlah_kartu = CASE WHEN ? THEN ? ELSE jumlah_kartu END,
+          bacaan_id_awal = CASE WHEN ? IS NOT NULL THEN ? ELSE bacaan_id_awal END
+      WHERE user_jid = ? AND tanggal = ?
+    `).run(bacaanId, suratAyat, adaJumlah ? 1 : 0, adaJumlah ? jumlahKartu : 0, bacaanIdAwal, bacaanIdAwal, userJid, tanggalLog);
   }
 }
 
