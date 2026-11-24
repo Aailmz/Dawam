@@ -18,7 +18,7 @@ const NAMA_TOOL_PENCATAT = ['lapor_bacaan_manual', 'lapor_bacaan_by_ayat', 'kore
 const NAMA_TOOL_BACA = ['get_progress_user', 'tanya_bacaan_hari_lain', 'get_rekap_progress_grup', 'get_pengaturan_user', 'get_feedback_saya'];
 // Klaim bentuk lampau "sudah dicatat" -- sengaja tidak menangkap "nanti aku catat" (rencana).
 const POLA_KLAIM_TERCATAT = /\b(?:sudah|udah|telah|berhasil)\s+(?:(?:aku|ku|dawam)\s*)?(?:di)?catat|(?<!nanti\s|akan\s|mau\s)\baku\s+catat|\btercatat\b|\bdicatat\b|\bkucatat\b/i;
-const { hapusDashTerlarang } = require('./groq');
+const { rapikanJawabanAi } = require('./groq');
 
 /**
  * Orkestrasi agent Dawam (adaptasi dari jalankanAgent Harga Petani).
@@ -99,7 +99,7 @@ async function jalankanAgentDawam({ systemPrompt, tools, historiChat, pesanBaru,
         continue;
       }
 
-      return { jawabanFinal: hapusDashTerlarang(teks), error: null };
+      return { jawabanFinal: rapikanJawabanAi(teks), error: null };
     }
 
     for (const toolCall of pesanAi.tool_calls) {

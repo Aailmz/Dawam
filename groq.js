@@ -28,7 +28,8 @@ ATURAN PENULISAN WAJIB (PELANGGARAN = FATAL):
 - Jangan pernah membalas dengan salam/sapaan seperti "Wa'alaikumsalam" atau "Assalamu'alaikum" KECUALI kamu diminta secara eksplisit membuat pesan pembuka/salam. Kamu adalah BOT yang MENGIRIM pesan ke user, bukan user yang membalas salam ke kamu.
 - Jangan mengulang/menggemakan ucapan terima kasih atau sambutan dari pesan sebelumnya. Fokus HANYA pada instruksi yang diberikan di prompt saat ini, jangan membalas seolah menyambung percakapan lain yang tidak diminta.
 - Jangan menyisipkan isi dari pesan lain atau instruksi lain yang tidak diminta. Hasilkan HANYA pesan sesuai permintaan spesifik di prompt user, tidak lebih.
-- Selesaikan kalimat dengan lengkap, jangan terpotong di tengah.`;
+- Selesaikan kalimat dengan lengkap, jangan terpotong di tengah.
+- Kalau pesan lebih dari 2 kalimat atau memuat beberapa gagasan (sapaan, isi, penutup/ayat), PECAH jadi beberapa paragraf pendek (1-2 kalimat per paragraf) dipisah SATU baris kosong, jangan ditumpuk jadi satu blok teks panjang.`;
 
 
 
@@ -404,6 +405,41 @@ function hapusDashTerlarang(teks) {
     .replace(/,\s*,/g, ',') // rapikan kalau kebetulan jadi dobel koma
     .trim();
 }
+
+// Singkatan yang diakhiri titik tapi BUKAN akhir kalimat (jangan dipecah di situ).
+const SINGKATAN_TANPA_AKHIR = /(?:^|[\s(\["“'])(?:qs|hr|no|dr|drs|hj|h|s|saw|swt|ra|as|yg|dll|dsb|dst|dgn|tgl|jl|st|q)\.$/i;
+
+/**
+ * Jaring pengaman deterministik: pesan panjang yang datang sebagai SATU blok teks dipecah
+ * jadi beberapa paragraf (dipisah baris kosong), tiap paragraf maksimal 2 kalimat.
+ * Tidak menyentuh teks yang sudah berparagraf/berbaris (AI atau template sudah menata sendiri),
+ * dan pesan pendek dibiarkan apa adanya.
+ */
+function pecahParagraf(teks, { minPanjang = 160, maksKalimat = 2 } = {}) {
+  if (!teks || teks.includes('\n') || teks.length < minPanjang) return teks;
+
+  // Potong setelah . ! ? (plus penutup kutip) atau emoji, kalau kalimat berikutnya mulai huruf kapital/kutip/emoji.
+  const potongan = teks.split(/(?<=[.!?…]["')”’]?|\p{Extended_Pictographic}️?)\s+(?=["“'*A-Z]|\p{Extended_Pictographic})/u);
+  const kalimat = [];
+  for (const p of potongan) {
+    const sebelum = kalimat[kalimat.length - 1];
+    if (sebelum && SINGKATAN_TANPA_AKHIR.test(sebelum)) kalimat[kalimat.length - 1] = `${sebelum} ${p}`;
+    else kalimat.push(p);
+  }
+  if (kalimat.length < 3) return teks;
+
+  const paragraf = [];
+  for (let i = 0; i < kalimat.length; i += maksKalimat) {
+    paragraf.push(kalimat.slice(i, i + maksKalimat).join(' '));
+  }
+  return paragraf.join('\n\n');
+}
+
+// Rapikan jawaban AI sebelum dikirim: buang dash terlarang, lalu pecah jadi paragraf.
+function rapikanJawabanAi(teks) {
+  return pecahParagraf(hapusDashTerlarang(teks));
+}
+
 async function callGroqText(userPrompt, maxTokens = 350, extraOptions = {}) {
   try {
     // Naikkan max_tokens minimal secara UNCONDITIONAL -- model yang dipakai sekarang
@@ -428,7 +464,7 @@ async function callGroqText(userPrompt, maxTokens = 350, extraOptions = {}) {
       console.log(`⚠️  Groq balas kosong. finish_reason: ${completion.choices[0]?.finish_reason}, max_tokens dipakai: ${amanMinimal}`);
       return null;
     }
-    return hapusDashTerlarang(result);
+    return rapikanJawabanAi(result);
   } catch (err) {
     console.error('❌ Groq API error:', err.message);
     return null;
@@ -438,6 +474,8 @@ async function callGroqText(userPrompt, maxTokens = 350, extraOptions = {}) {
 module.exports = {
   // existing
   hapusDashTerlarang,
+  pecahParagraf,
+  rapikanJawabanAi,
   generateReminderSholat,
   generateTawaranNgaji,
   parseIntentJawaban,
