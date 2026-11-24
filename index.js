@@ -192,7 +192,7 @@ const PESAN_ONBOARDING_SELESAI_TEMPLATE = (nama, lokasi, target) =>
   `Siap, ${nama}! Dawam sudah catat domisilimu di ${lokasi}, dengan target khatam 1 juz per ${target} hari 📍`;
 
 const PESAN_PERKENALAN_PERAN =
-  'Sedikit cerita soal Dawam ya 🤍\n\nSetiap hari, aku bakal ingetin kamu pas waktu shalat tiba. Nggak lama-lama, cuma pengingat sederhana biar nggak kelewat.\n\nSelepas itu, aku juga bakal nanya apakah kamu mau lanjut tilawah sedikit. Nggak ada paksaan, kalau lagi sibuk atau belum sempat, bilang aja "nanti", aku nggak akan maksa 😊\n\nKalau kamu bilang mau, aku kirimin bacaan lanjutannya, dari halaman terakhir yang udah kamu baca. Pelan-pelan aja, yang penting konsisten.\n\nOh iya, kamu juga bisa nanya aku kapan aja kok. Soal progress bacaanmu, mau lanjut baca, atau sekadar cerita. Yuk kita mulai perjalanan ini bareng-bareng, semoga Allah mudahkan 🌙';
+  'Sedikit cerita soal Dawam ya 🤍\n\nSetiap hari, aku bakal ingetin kamu pas waktu shalat tiba. Nggak lama-lama, cuma pengingat sederhana biar nggak kelewat.\n\nSelepas itu, aku juga bakal nanya apakah kamu mau lanjut tilawah sedikit. Nggak ada paksaan, kalau lagi sibuk atau belum sempat, bilang aja "nanti", aku nggak akan maksa 😊\n\nKalau kamu bilang mau, aku kirimin bacaan lanjutannya, dari kartu terakhir yang udah kamu baca. Pelan-pelan aja, yang penting konsisten.\n\nOh iya, kamu juga bisa nanya aku kapan aja kok. Soal progress bacaanmu, mau lanjut baca, atau sekadar cerita. Yuk kita mulai perjalanan ini bareng-bareng, semoga Allah mudahkan 🌙';
 
 const KEYWORD_AKTIVASI = 'dawam';
 
@@ -979,7 +979,7 @@ async function kirimTawaranLelangKeGrup(groupJid) {
     setTawaranLelangGrup(groupJid, diBawahPace);
   }
 
-  // Yang dikirim ke grup sekarang laporan harian (persen + kurang berapa halaman),
+  // Yang dikirim ke grup sekarang laporan harian (persen + kurang berapa kartu),
   // pindah dari jam 20:00 ke jam Isya.
   await kirimRekapHarianKeGrup(groupJid, false, true);
 }
@@ -1400,7 +1400,7 @@ function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
   for (const d of sudahAktif) {
     // Belum ada target harian yang terhitung (target belum diset / belum pernah mulai baca):
     // persennya memang tidak bisa dihitung, JANGAN dipaksa tampil "0%" karena menyesatkan.
-    if (d.halaman_target_hari_ini === null || d.halaman_target_hari_ini === undefined) {
+    if (d.kartu_target_hari_ini === null || d.kartu_target_hari_ini === undefined) {
       teks += d.sudah_baca_hari_ini
         ? `✅ *${d.nama}* — sudah baca hari ini (target harian belum terhitung)\n\n`
         : `💤 *${d.nama}* — belum mulai tilawah (target harian belum terhitung)\n\n`;
@@ -1418,14 +1418,12 @@ function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
 
     const emoji = d.persen_pace === 0 || persenTampilan === '0%' ? '💤' : d.status_pace === 'SUDAH_CAPAI_PACE' ? '🎉' : d.status_pace === 'DI_BAWAH_PACE' ? '📖' : '✅';
 
-    // Keterangan halaman -- cuma ditampilkan kalau user punya target harian.
-    let keteranganHalaman = '';
-    if (d.halaman_target_hari_ini !== null && d.halaman_target_hari_ini !== undefined) {
-      const ditempuh = d.halaman_ditempuh_hari_ini ?? 0;
-      keteranganHalaman = ` (${ditempuh}/${d.halaman_target_hari_ini} halaman)`;
-    }
+    // Keterangan kartu (bilangan bulat, satuan yang sama dengan yang dibaca user) -- cuma
+    // ditampilkan kalau user punya target harian.
+    const ditempuh = d.kartu_ditempuh_hari_ini ?? 0;
+    const keteranganKartu = ` (${ditempuh}/${d.kartu_target_hari_ini} kartu)`;
 
-    teks += `${emoji} *${d.nama}* — ${persenTampilan} dari target harian${keteranganHalaman}\n\n`;
+    teks += `${emoji} *${d.nama}* — ${persenTampilan} dari target harian${keteranganKartu}\n\n`;
   }
 
   if (belumAktif.length > 0) {

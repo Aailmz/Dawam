@@ -660,11 +660,11 @@ function bulatkanHalaman(h) {
   return h >= 10 ? Math.round(h) : Math.round(h * 10) / 10;
 }
 
-// Input dalam KARTU. Output: halaman mushaf kalau < 1 juz, juz (bulat) kalau lebih.
+// Input dalam KARTU. Output: kartu (bilangan bulat) kalau < 1 juz, juz (bulat) kalau lebih.
+// Satuan tampilan ke user = KARTU, bukan halaman mushaf (user membaca kartu Dawam).
 function formatSelisihUntukTampilan(selisihKartuAbs) {
   if (selisihKartuAbs < rataKartuPerJuz()) {
-    if (selisihKartuAbs === 0) return { satuan: 'halaman', nilai: 0 };
-    return { satuan: 'halaman', nilai: Math.max(1, Math.round(kartuKeHalaman(selisihKartuAbs))) };
+    return { satuan: 'kartu', nilai: Math.round(selisihKartuAbs) };
   }
   const juz = Math.round(selisihKartuAbs / rataKartuPerJuz());
   return { satuan: 'juz', nilai: juz };
@@ -726,9 +726,9 @@ function hitungSisaProgressUser(jid) {
       ada_target: false,
       target_juz_per_hari: user.target_juz_per_hari || null,
       juz_sekarang: juzSekarang,
-      halaman_posisi_sekarang: bacaan?.halaman ?? 0,
-      halaman_ditempuh: bulatkanHalaman(kartuKeHalaman(halamanDitempuh)),
-      total_halaman_keseluruhan: JUMLAH_HALAMAN_MUSHAF,
+      kartu_posisi_sekarang: posisiSekarang,
+      kartu_ditempuh: halamanDitempuh,
+      total_kartu_keseluruhan: totalKartuKeseluruhan(),
       sudah_baca_hari_ini: user.tanggal_terakhir_baca === hariIniISOAwal,
       // null = memang tidak relevan dihitung (belum ada target/belum mulai), BUKAN 0%.
       // Konsumen (rekap) WAJIB tampilkan field ini -- null ditampilkan sebagai "-" bukan di-skip.
@@ -748,9 +748,9 @@ function hitungSisaProgressUser(jid) {
       ada_target: false,
       target_juz_per_hari: user.target_juz_per_hari,
       juz_sekarang: juzSekarang,
-      halaman_posisi_sekarang: bacaan?.halaman ?? 0,
-      halaman_ditempuh: bulatkanHalaman(kartuKeHalaman(halamanDitempuh)),
-      total_halaman_keseluruhan: JUMLAH_HALAMAN_MUSHAF,
+      kartu_posisi_sekarang: posisiSekarang,
+      kartu_ditempuh: halamanDitempuh,
+      total_kartu_keseluruhan: totalKartuKeseluruhan(),
     };
   }
 
@@ -781,15 +781,15 @@ function hitungSisaProgressUser(jid) {
     ada_target: true,
     target_juz_per_hari: user.target_juz_per_hari,
     juz_sekarang: juzSekarang,
-    halaman_posisi_sekarang: bacaan?.halaman ?? 0,
-    halaman_ditempuh: bulatkanHalaman(kartuKeHalaman(halamanDitempuh)),
+    // Semua angka progres dalam KARTU (bilangan bulat), sama dengan yang dibaca user.
+    kartu_posisi_sekarang: posisiSekarang,
+    kartu_ditempuh: halamanDitempuh,
     hari_berjalan: hariBerjalan,
-    // Semua field "halaman_*" di bawah SUDAH dalam halaman mushaf (bukan kartu).
-    halaman_target_hari_ini: bulatkanHalaman(kartuKeHalaman(halamanTarget)),
-    halaman_ditempuh_hari_ini: bulatkanHalaman(kartuKeHalaman(halamanDitempuhHariIni)),
-    total_halaman_keseluruhan: JUMLAH_HALAMAN_MUSHAF,
+    kartu_target_hari_ini: halamanTarget,
+    kartu_ditempuh_hari_ini: halamanDitempuhHariIni,
+    total_kartu_keseluruhan: totalKartuKeseluruhan(),
     status,
-    selisih_halaman: bulatkanHalaman(kartuKeHalaman(selisihHalaman)),
+    selisih_kartu: selisihHalaman,
     selisih_tampilan: `${status === 'SUDAH_CAPAI_PACE' ? 'lebih' : 'kurang'} ${tampilan.nilai} ${tampilan.satuan}`,
     persen_pace: persenPace,
     sudah_baca_hari_ini: sudahBacaHariIni,
@@ -1032,13 +1032,13 @@ function getRekapProgressGroup(groupJid) {
       sudah_aktivasi_personal: true,
       posisi_terakhir: bacaan?.surat_ayat || 'belum mulai baca',
       juz_sekarang: bacaan?.juz ?? null,
-      halaman_ditempuh: sisaProgress.halaman_ditempuh ?? 0,
+      kartu_ditempuh: sisaProgress.kartu_ditempuh ?? 0,
       target_hari_per_juz: user.target_juz_per_hari || 'belum ditentukan',
       status_pace: sisaProgress.status || null,
       selisih_dari_target: sisaProgress.selisih_tampilan || null,
       persen_pace: sisaProgress.persen_pace ?? null,
-      halaman_ditempuh_hari_ini: sisaProgress.halaman_ditempuh_hari_ini ?? null, // <-- tambahan
-      halaman_target_hari_ini: sisaProgress.halaman_target_hari_ini ?? null,     // <-- tambahan
+      kartu_ditempuh_hari_ini: sisaProgress.kartu_ditempuh_hari_ini ?? null,
+      kartu_target_hari_ini: sisaProgress.kartu_target_hari_ini ?? null,
       sudah_baca_hari_ini: sisaProgress.sudah_baca_hari_ini ?? false,
     };
   });
@@ -1307,6 +1307,7 @@ module.exports = {
   sudahKhatamSetelahWrap,
   sudahKhatamSetelahKirim,
   hitungTargetHarian,
+  rataKartuPerJuz,
   hitungPersenMingguan,
   setLogBacaanHarian,
   JUMLAH_HALAMAN_MUSHAF,
