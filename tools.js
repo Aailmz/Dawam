@@ -60,16 +60,20 @@ const TOOLS_PERSONAL = [
     type: 'function',
     function: {
       name: 'lapor_bacaan_manual',
-      description: 'Catat laporan bacaan manual (perkiraan jumlah halaman) dari user, untuk SEMUA mode (reminder-saja maupun kartu -- user mode kartu juga bisa baca di luar kartu, misal dari mushaf/app lain). WAJIB panggil ini (setelah konfirmasi rentang bacaan ke user) kalau user melaporkan sudah baca berapa halaman hari ini; tanpa pemanggilan tool ini laporannya TIDAK tercatat dan tidak masuk rekap harian. Kalau user menyebut surat+ayat spesifik, pakai lapor_bacaan_by_ayat.',
+      description: 'Catat laporan bacaan manual (perkiraan jumlah KARTU) dari user, untuk SEMUA mode (reminder-saja maupun kartu -- user mode kartu juga bisa baca di luar kartu, misal dari mushaf/app lain). WAJIB panggil ini (setelah konfirmasi rentang bacaan ke user) kalau user melaporkan sudah baca berapa kartu hari ini; tanpa pemanggilan tool ini laporannya TIDAK tercatat dan tidak masuk rekap harian. Kalau user menyebut surat+ayat spesifik, pakai lapor_bacaan_by_ayat.',
       parameters: {
         type: 'object',
         properties: {
+          jumlah_kartu: {
+            type: 'number',
+            description: 'Jumlah KARTU yang BARU SAJA dibaca user HARI INI (satuan resmi Dawam, bilangan bulat). Kalau user cuma bilang "udah baca" tanpa angka/kuantitas sama sekali, JANGAN panggil tool ini -- tanya dulu kira-kira berapa kartu.',
+          },
           jumlah_halaman: {
             type: 'number',
-            description: 'Perkiraan jumlah halaman yang BARU SAJA dibaca user HARI INI, sesuai yang disebutkan/bisa diestimasi dari pesan user. Kalau user cuma bilang "udah baca" tanpa ada angka/kuantitas sama sekali, JANGAN panggil tool ini -- tanya dulu kira-kira berapa halaman.',
+            description: 'HANYA kalau user menyebut jumlah HALAMAN mushaf cetak (bukan kartu), isi ini, dan JANGAN isi jumlah_kartu. Sistem yang mengonversinya ke kartu. Jangan menghitung sendiri.',
           },
         },
-        required: ['jumlah_halaman'],
+        required: [],
       },
     },
   },
@@ -77,7 +81,7 @@ const TOOLS_PERSONAL = [
     type: 'function',
     function: {
       name: 'lapor_bacaan_by_ayat',
-      description: 'Catat progress bacaan berdasarkan surat+ayat yang disebut user (bukan jumlah halaman), untuk SEMUA mode (reminder-saja maupun kartu), supaya tidak ada ketidaksesuaian antara card Dawam dan halaman fisik mushaf/app user. Posisi akan di-set ke card yang mengandung ayat tersebut dan jumlah kartu yang maju ikut dihitung ke target hari ini. WAJIB panggil ini (bukan lapor_bacaan_manual) kalau user menyebutkan surat+ayat spesifik, misal "udah sampe Al-Baqarah ayat 50"; tanpa pemanggilan tool ini laporannya TIDAK tercatat dan tidak masuk rekap harian.',
+      description: 'Catat progress bacaan berdasarkan surat+ayat yang disebut user (bukan perkiraan jumlah kartu), untuk SEMUA mode (reminder-saja maupun kartu), supaya tidak ada ketidaksesuaian antara card Dawam dan bacaan user di mushaf/app lain. Posisi akan di-set ke card yang mengandung ayat tersebut dan jumlah kartu yang maju ikut dihitung ke target hari ini. WAJIB panggil ini (bukan lapor_bacaan_manual) kalau user menyebutkan surat+ayat spesifik, misal "udah sampe Al-Baqarah ayat 50"; tanpa pemanggilan tool ini laporannya TIDAK tercatat dan tidak masuk rekap harian.',
       parameters: {
         type: 'object',
         properties: {
@@ -88,6 +92,14 @@ const TOOLS_PERSONAL = [
           nomor_ayat: {
             type: 'number',
             description: 'Nomor ayat yang disebutkan user.',
+          },
+          dari_nama_surat: {
+            type: 'string',
+            description: 'OPSIONAL. Isi HANYA kalau user menyebut titik MULAI bacaannya ("tadi baca dari An-Nisa ayat 1 sampai ayat 20"). Nama surat titik mulai. Kalau user hanya menyebut titik akhir, JANGAN diisi.',
+          },
+          dari_nomor_ayat: {
+            type: 'number',
+            description: 'OPSIONAL. Nomor ayat titik mulai; wajib diisi bersama dari_nama_surat.',
           },
         },
         required: ['nama_surat', 'nomor_ayat'],
@@ -376,16 +388,20 @@ const TOOLS_GRUP = [
     type: 'function',
     function: {
       name: 'lapor_bacaan_manual',
-      description: 'Catat laporan bacaan (perkiraan jumlah halaman) milik ORANG YANG BICARA di grup ini, supaya masuk rekap harian. WAJIB panggil kalau si pengirim pesan melaporkan sudah baca sekian halaman hari ini; tanpa pemanggilan tool ini laporannya TIDAK tercatat. Hanya untuk pengirim pesan sendiri, bukan untuk orang lain. Kalau pengirim cuma bilang "udah baca" tanpa angka sama sekali, JANGAN panggil, tanya dulu kira-kira berapa halaman.',
+      description: 'Catat laporan bacaan (perkiraan jumlah KARTU) milik ORANG YANG BICARA di grup ini, supaya masuk rekap harian. WAJIB panggil kalau si pengirim pesan melaporkan sudah baca sekian kartu hari ini; tanpa pemanggilan tool ini laporannya TIDAK tercatat. Hanya untuk pengirim pesan sendiri, bukan untuk orang lain. Kalau pengirim cuma bilang "udah baca" tanpa angka sama sekali, JANGAN panggil, tanya dulu kira-kira berapa kartu.',
       parameters: {
         type: 'object',
         properties: {
+          jumlah_kartu: {
+            type: 'number',
+            description: 'Jumlah KARTU yang BARU SAJA dibaca pengirim HARI INI (satuan resmi Dawam, bilangan bulat), sesuai pesannya.',
+          },
           jumlah_halaman: {
             type: 'number',
-            description: 'Perkiraan jumlah halaman yang BARU SAJA dibaca pengirim HARI INI, sesuai pesannya.',
+            description: 'HANYA kalau pengirim menyebut jumlah HALAMAN mushaf cetak (bukan kartu), isi ini, dan JANGAN isi jumlah_kartu. Sistem yang mengonversinya ke kartu.',
           },
         },
-        required: ['jumlah_halaman'],
+        required: [],
       },
     },
   },
@@ -399,6 +415,8 @@ const TOOLS_GRUP = [
         properties: {
           nama_surat: { type: 'string', description: 'Nama surat yang disebutkan, apa adanya (contoh: "Al-Baqarah").' },
           nomor_ayat: { type: 'number', description: 'Nomor ayat yang disebutkan.' },
+          dari_nama_surat: { type: 'string', description: 'OPSIONAL. Isi HANYA kalau pengirim menyebut titik MULAI bacaannya ("dari An-Nisa 1 sampai 20"). Nama surat titik mulai.' },
+          dari_nomor_ayat: { type: 'number', description: 'OPSIONAL. Nomor ayat titik mulai; wajib diisi bersama dari_nama_surat.' },
         },
         required: ['nama_surat', 'nomor_ayat'],
       },
@@ -471,43 +489,48 @@ const TOOLS_GRUP = [
 // sama pola dengan konteks.kirimPesan di Harga Petani.
 
 async function eksekusiLaporBacaanManual(args, konteks) {
-  const jumlah_halaman = Number(args.jumlah_halaman);
+  // Satuan resmi = KARTU. Kalau user menyebut halaman mushaf cetak, sistem yang mengonversi ke kartu.
+  const kartuMentah = args.jumlah_kartu !== undefined && args.jumlah_kartu !== null && args.jumlah_kartu !== ''
+    ? Number(args.jumlah_kartu)
+    : (args.jumlah_halaman !== undefined && args.jumlah_halaman !== null && args.jumlah_halaman !== ''
+      ? db.halamanKeKartu(Number(args.jumlah_halaman))
+      : NaN);
+  const jumlah_kartu = Math.round(kartuMentah);
   const user = db.getUser(konteks.jid);
   const modeKartu = user.bentuk_bacaan !== 'reminder';
   const gapHari = hitungGapHariTanpaLapor(konteks.jid);
 
-  if (!Number.isFinite(jumlah_halaman) || jumlah_halaman <= 0 || jumlah_halaman > 60) {
+  // Batas wajar per hari ~3 juz (dulu 60 halaman mushaf), dalam kartu.
+  const BATAS_WAJAR_PER_HARI = Math.round(db.kartuPerHalaman() * 60);
+
+  if (!Number.isFinite(jumlah_kartu) || jumlah_kartu <= 0 || jumlah_kartu > BATAS_WAJAR_PER_HARI) {
     const sisa = db.hitungSisaProgressUser(konteks.jid);
     return {
       sukses: false,
-      halaman_target_hari_ini: sisa.halaman_target_hari_ini ?? null,
+      kartu_target_hari_ini: sisa.kartu_target_hari_ini ?? null,
       target_juz_per_hari: user.target_juz_per_hari || 'belum ditentukan',
-      catatan_untuk_ai: `Angka yang dilaporkan user (${jumlah_halaman} halaman) kelihatan tidak masuk akal. JANGAN dicatat. Tegur dengan lembut, minta user infokan ulang jumlah halaman yang lebih jelas/masuk akal ke Dawam, dan sebutkan target hariannya biar ada acuan: 1 juz per ${user.target_juz_per_hari || '?'} hari (sekitar ${sisa.halaman_target_hari_ini ?? '?'} halaman/hari).`,
+      catatan_untuk_ai: `Angka yang dilaporkan user (${Number.isFinite(jumlah_kartu) ? jumlah_kartu : 'tidak jelas'} kartu) kelihatan tidak masuk akal. JANGAN dicatat. Tegur dengan lembut, minta user infokan ulang jumlah kartu yang lebih jelas/masuk akal ke Dawam, dan sebutkan target hariannya biar ada acuan: 1 juz per ${user.target_juz_per_hari || '?'} hari (sekitar ${sisa.kartu_target_hari_ini ?? '?'} kartu/hari).`,
     };
   }
 
   // Fix: cek TOTAL akumulasi hari ini (termasuk laporan sebelumnya hari yang sama)
-  // supaya user tidak bisa lapor "20 halaman" berkali-kali jadi ratusan dalam sehari.
+  // supaya user tidak bisa lapor banyak berkali-kali jadi ratusan dalam sehari.
   const hariIniISO = db.tanggalHariIniISO();
   const logHariIni = db.getLogBacaanHarianByTanggal(konteks.jid, hariIniISO);
-  // Log menyimpan KARTU; batas wajar & angka ke user dalam HALAMAN mushaf.
-  const sudahDilaporkanHariIni = db.bulatkanHalaman(db.kartuKeHalaman(logHariIni?.jumlah_kartu || 0));
-  const totalSetelahIni = sudahDilaporkanHariIni + jumlah_halaman;
+  const sudahDilaporkanHariIni = logHariIni?.jumlah_kartu || 0;
+  const totalSetelahIni = sudahDilaporkanHariIni + jumlah_kartu;
 
-  const BATAS_WAJAR_PER_HARI = 60; // ~2 juz, batas atas yang masih masuk akal untuk 1 hari
   if (totalSetelahIni > BATAS_WAJAR_PER_HARI) {
     const sisa = db.hitungSisaProgressUser(konteks.jid);
     return {
       sukses: false,
       sudah_dilaporkan_hari_ini: sudahDilaporkanHariIni,
-      halaman_target_hari_ini: sisa.halaman_target_hari_ini ?? null,
-      catatan_untuk_ai: `User sudah lapor ${sudahDilaporkanHariIni} halaman hari ini, ditambah laporan baru ${jumlah_halaman} halaman jadi total ${totalSetelahIni} -- ini kelihatan tidak masuk akal untuk satu hari. JANGAN dicatat. Tegur dengan lembut, tanya ulang apakah ini laporan susulan dari hari lain (bukan hari ini) atau memang ada salah sebut angka.`,
+      kartu_target_hari_ini: sisa.kartu_target_hari_ini ?? null,
+      catatan_untuk_ai: `User sudah lapor ${sudahDilaporkanHariIni} kartu hari ini, ditambah laporan baru ${jumlah_kartu} kartu jadi total ${totalSetelahIni} -- ini kelihatan tidak masuk akal untuk satu hari. JANGAN dicatat. Tegur dengan lembut, tanya ulang apakah ini laporan susulan dari hari lain (bukan hari ini) atau memang ada salah sebut angka.`,
     };
   }
 
-  // Laporan user dalam halaman mushaf -> disimpan sebagai kartu (1 halaman = beberapa kartu),
-  // supaya sebanding dengan kartu yang dikirim bot dan dengan target harian.
-  db.catatLaporanBacaanManual(konteks.jid, hariIniISO, db.halamanKeKartu(jumlah_halaman));
+  db.catatLaporanBacaanManual(konteks.jid, hariIniISO, jumlah_kartu);
   db.setTanggalTerakhirBaca(konteks.jid, hariIniISO);
   // Tanpa ini user yang cuma lapor manual dianggap "tanpa target" (persen rekap tidak terhitung).
   db.pastikanTanggalMulaiBaca(konteks.jid, hariIniISO);
@@ -520,9 +543,9 @@ async function eksekusiLaporBacaanManual(args, konteks) {
 
   return {
     sukses: true,
-    halaman_dilaporkan: jumlah_halaman,
-    halaman_ditempuh_hari_ini: sisa.halaman_ditempuh_hari_ini,
-    halaman_target_hari_ini: sisa.halaman_target_hari_ini,
+    kartu_dilaporkan: jumlah_kartu,
+    kartu_ditempuh_hari_ini: sisa.kartu_ditempuh_hari_ini,
+    kartu_target_hari_ini: sisa.kartu_target_hari_ini,
     status_pace: sisa.status,
     selisih_dari_target: sisa.selisih_tampilan,
     gap_hari_tanpa_lapor: gapHari,
@@ -533,7 +556,7 @@ async function eksekusiLaporBacaanManual(args, konteks) {
   };
 }
 
-async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat: nomorAyatMentah }, konteks) {
+async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat: nomorAyatMentah, dari_nama_surat, dari_nomor_ayat: dariAyatMentah }, konteks) {
   const nomor_ayat = Math.trunc(Number(nomorAyatMentah)); // LLM kadang mengirim string
   const user = db.getUser(konteks.jid);
   const modeKartu = user.bentuk_bacaan !== 'reminder';
@@ -547,17 +570,55 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat: nomorAyatMent
     return {
       sukses: false,
       pesan: `Tidak ditemukan card yang mengandung "${nama_surat}" ayat ${nomor_ayat}.`,
-      catatan_untuk_ai: `Data belum tersedia untuk ayat spesifik ini (kemungkinan data belum lengkap di sistem). Minta maaf dengan lembut, tawarkan dia lapor pakai perkiraan jumlah halaman saja (tool lapor_bacaan_manual) sebagai alternatif.`,
+      catatan_untuk_ai: `Data belum tersedia untuk ayat spesifik ini (kemungkinan data belum lengkap di sistem). Minta maaf dengan lembut, tawarkan dia lapor pakai perkiraan jumlah kartu saja (tool lapor_bacaan_manual) sebagai alternatif.`,
     };
+  }
+
+  // Titik MULAI bacaan (opsional): user bilang "dari surat A ayat x sampai surat B ayat y". Dengan titik
+  // mulai, jumlah kartu yang dibaca dihitung dari rentang itu (dalam kartu), bukan dari posisi terakhir.
+  let bacaanAwal = null;
+  const adaTitikMulai = typeof dari_nama_surat === 'string' && dari_nama_surat.trim() !== '';
+  if (adaTitikMulai) {
+    const dariAyat = Math.trunc(Number(dariAyatMentah));
+    bacaanAwal = Number.isFinite(dariAyat) ? db.cariBacaanBySuratDanAyat(dari_nama_surat, dariAyat) : null;
+    if (!bacaanAwal) {
+      return {
+        sukses: false,
+        pesan: `Tidak ditemukan card yang mengandung titik mulai "${dari_nama_surat}" ayat ${dariAyatMentah}.`,
+        catatan_untuk_ai: 'Titik mulai bacaan yang disebut tidak ditemukan. Minta maaf dengan lembut, tanyakan apakah nama surat/nomor ayat awalnya sudah benar, atau tawarkan lapor titik akhirnya saja.',
+      };
+    }
+    if (bacaanAwal.urutan > bacaanDitemukan.urutan) {
+      return {
+        sukses: false,
+        pesan: 'Titik mulai berada SETELAH titik akhir.',
+        catatan_untuk_ai: `Titik mulai (${bacaanAwal.surat_ayat}) ada setelah titik akhir (${bacaanDitemukan.surat_ayat}) di urutan mushaf. JANGAN dicatat. Tanyakan dengan lembut apakah ada yang tertukar atau salah sebut.`,
+      };
+    }
   }
 
   // Deteksi lompatan ganjil: mundur jauh ATAU maju TERLALU jauh (>30 urutan/card ~ 1 juz lebih)
   // dalam satu laporan -- kemungkinan salah sebut ayat/surat. JANGAN langsung overwrite,
   // kasih kesempatan AI konfirmasi dulu ke user.
-  const selisihUrutan = bacaanDitemukan.urutan - (posisiSebelumnya?.urutan || 0);
+  const posisiLamaUrutan = posisiSebelumnya?.urutan || 0;
+  const selisihUrutan = bacaanDitemukan.urutan - posisiLamaUrutan;
   const mundurSignifikan = selisihUrutan < -3; // toleransi kecil, bisa aja emang mau ulang ayat dikit
-  // Batas "terlalu jauh" = kira-kira lebih dari 1 juz (20 halaman mushaf) dalam sekali lapor.
-  const majuTerlaluJauh = selisihUrutan > Math.max(10, Math.round(db.kartuPerHalaman() * 20));
+  // Kartu yang dikreditkan hari ini. Tanpa titik mulai: kartu yang maju dari posisi terakhir.
+  // Dengan titik mulai: kartu dalam rentang yang BELUM terhitung (kartu sampai posisi terakhir tidak
+  // dihitung dua kali, jadi mengulang laporan yang sama = kredit 0). Posisi pertama kali (belum ada
+  // pembanding) dihitung 1 kartu, atau seluruh rentang kalau titik mulainya disebut.
+  let jumlahKartuBaru;
+  if (bacaanAwal) {
+    const batasSudahTerhitung = posisiSebelumnya ? Math.max(bacaanAwal.urutan - 1, posisiLamaUrutan) : bacaanAwal.urutan - 1;
+    jumlahKartuBaru = Math.max(0, bacaanDitemukan.urutan - batasSudahTerhitung);
+  } else {
+    jumlahKartuBaru = !posisiSebelumnya ? 1 : Math.max(0, selisihUrutan);
+  }
+  // Batas "terlalu jauh" = kira-kira lebih dari 1 juz (rata-rata kartu per juz) dalam sekali lapor.
+  // Dengan titik mulai yang dihitung adalah kartu yang dibaca, bukan jarak dari posisi lama
+  // (user boleh membaca di luar Dawam lalu lompat posisi).
+  const ukuranLompat = bacaanAwal ? jumlahKartuBaru : selisihUrutan;
+  const majuTerlaluJauh = ukuranLompat > Math.max(10, Math.round(db.rataKartuPerJuz()));
 
   if ((mundurSignifikan || majuTerlaluJauh) && posisiSebelumnya &&
       !sudahDikonfirmasi(laporMenunggu, konteks.jid, bacaanDitemukan.urutan, konteks.giliranId)) {
@@ -582,12 +643,9 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat: nomorAyatMent
   db.resetNoResponse(konteks.jid);
 
   // Catat ke log harian supaya konsisten dengan hitungSisaProgressUser (persen_pace hari
-  // ini dihitung dari jumlah_kartu di log_bacaan_harian). Jumlah kartu = berapa kartu
-  // yang maju dari posisi sebelumnya (bukan selalu 1), minimal 1. Kalau belum ada posisi
-  // sebelumnya, tidak ada pembanding yang bisa dipercaya, jadi dihitung 1.
+  // ini dihitung dari jumlah_kartu di log_bacaan_harian). jumlahKartuBaru dihitung di atas.
   // Tidak maju (ulang ayat yang sama / mundur sedikit) = kredit 0, supaya mengulang laporan yang
-  // sama tidak menaikkan persen harian. Posisi pertama kali (belum ada pembanding) dihitung 1.
-  const jumlahKartuBaru = !posisiSebelumnya ? 1 : Math.max(0, selisihUrutan);
+  // sama tidak menaikkan persen harian.
   db.catatLogBacaanHarian(konteks.jid, hariIniISO, bacaanDitemukan.urutan, bacaanDitemukan.surat_ayat, null, jumlahKartuBaru);
 
   const sisa = db.hitungSisaProgressUser(konteks.jid);
@@ -599,15 +657,17 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat: nomorAyatMent
     sukses: true,
     posisi_sebelumnya: posisiSebelumnya?.surat_ayat || null,
     posisi_baru: bacaanDitemukan.surat_ayat,
-    halaman_ditempuh_hari_ini: sisa.halaman_ditempuh_hari_ini,
-    halaman_target_hari_ini: sisa.halaman_target_hari_ini,
+    posisi_mulai: bacaanAwal ? bacaanAwal.surat_ayat : null,
+    kartu_dilaporkan: jumlahKartuBaru,
+    kartu_ditempuh_hari_ini: sisa.kartu_ditempuh_hari_ini,
+    kartu_target_hari_ini: sisa.kartu_target_hari_ini,
     status_pace: sisa.status,
     selisih_dari_target: sisa.selisih_tampilan,
     gap_hari_tanpa_lapor: gapHari,
     mode_saat_ini: modeKartu ? 'kartu' : 'reminder',
     catatan_untuk_ai: (gapHari !== null && gapHari >= 2
       ? `Posisi berhasil disinkronkan dari "${posisiSebelumnya?.surat_ayat || 'belum ada posisi sebelumnya'}" ke "${bacaanDitemukan.surat_ayat}". PENTING: user baru lapor lagi setelah ${gapHari} hari tidak ada laporan. Tanyakan natural tanpa menghakimi apakah beberapa hari kemarin sempat baca juga tapi belum lapor. Sebutkan juga progress konkret (dari...ke...) dan status terhadap target hari ini apa adanya.`
-      : `Posisi berhasil disinkronkan dari "${posisiSebelumnya?.surat_ayat || 'belum ada posisi sebelumnya'}" ke "${bacaanDitemukan.surat_ayat}". Sebutkan progress ini dengan konkret (dari...ke..., atau sekian ayat/halaman), apresiasi singkat, dan sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).`) + catatanModeKartu,
+      : `Posisi berhasil disinkronkan dari "${posisiSebelumnya?.surat_ayat || 'belum ada posisi sebelumnya'}" ke "${bacaanDitemukan.surat_ayat}". Sebutkan progress ini dengan konkret (dari...ke..., atau sekian kartu), apresiasi singkat, dan sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).`) + catatanModeKartu,
   };
 }
 
@@ -628,7 +688,7 @@ async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_a
   if (mempengaruhiPosisi) {
     const posisiSaatIni = db.getUser(konteks.jid).last_sent_bacaan_id || 0;
     const lompat = Math.abs(bacaanDitemukan.urutan - posisiSaatIni);
-    const batasLompat = Math.round(db.kartuPerHalaman() * 20); // ~1 juz
+    const batasLompat = Math.round(db.rataKartuPerJuz()); // ~1 juz
     if (posisiSaatIni > 0 && lompat > batasLompat) {
       if (!sudahDikonfirmasi(koreksiMenunggu, konteks.jid, bacaanDitemukan.urutan, konteks.giliranId)) {
         const posisiLama = db.getBacaanByUrutan(posisiSaatIni);
@@ -637,7 +697,7 @@ async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_a
           butuh_konfirmasi: true,
           posisi_sekarang: posisiLama?.surat_ayat || null,
           posisi_diminta: bacaanDitemukan.surat_ayat,
-          catatan_untuk_ai: `Koreksi ini memindahkan posisi bacaan user SANGAT JAUH (dari "${posisiLama?.surat_ayat}" ke "${bacaanDitemukan.surat_ayat}", sekitar ${Math.round(db.kartuKeHalaman(lompat))} halaman) dan BELUM dilakukan. Tanyakan sekali lagi dengan jelas apakah memang posisinya mau dipindah ke situ (bukan salah sebut surat/ayat), dan JANGAN memanggil tool ini lagi sebelum user menjawab tegas. Kalau user menjawab tegas ya, panggil ulang dengan argumen yang SAMA.`,
+          catatan_untuk_ai: `Koreksi ini memindahkan posisi bacaan user SANGAT JAUH (dari "${posisiLama?.surat_ayat}" ke "${bacaanDitemukan.surat_ayat}", sekitar ${lompat} kartu) dan BELUM dilakukan. Tanyakan sekali lagi dengan jelas apakah memang posisinya mau dipindah ke situ (bukan salah sebut surat/ayat), dan JANGAN memanggil tool ini lagi sebelum user menjawab tegas. Kalau user menjawab tegas ya, panggil ulang dengan argumen yang SAMA.`,
         };
       }
     }
@@ -704,15 +764,15 @@ async function eksekusiGetProgressUser(_, konteks) {
     sukses: true,
     posisi_terakhir: bacaan?.surat_ayat || 'belum mulai membaca',
     juz_sekarang: bacaan?.juz ?? null,
-    halaman_posisi_sekarang: sisaProgress.halaman_posisi_sekarang,
-    halaman_ditempuh: sisaProgress.halaman_ditempuh,
-    total_halaman_keseluruhan: sisaProgress.total_halaman_keseluruhan,
+    kartu_posisi_sekarang: sisaProgress.kartu_posisi_sekarang,
+    kartu_ditempuh: sisaProgress.kartu_ditempuh,
+    total_kartu_keseluruhan: sisaProgress.total_kartu_keseluruhan,
     target_hari_per_juz: user.target_juz_per_hari || 'belum ditentukan',
     hari_berjalan: db.hitungHariBerjalanUser(konteks.jid),
     mode_saat_ini: user.mode_baca_arab_saja === 1 ? 'arab' : 'terjemah-saja (halangan)',
     status_pace: sisaProgress.status || null,
     selisih_dari_target: sisaProgress.selisih_tampilan || null,
-    catatan_untuk_ai: 'posisi_terakhir/juz_sekarang cuma LOKASI baca (bisa jadi user memang mulai dari situ, bukan berarti progress banyak). Progress SEBENARNYA ada di halaman_ditempuh (jumlah halaman mushaf yang sudah dibaca sejak mulai) dan selisih_dari_target (sudah final, pakai apa adanya, JANGAN dihitung ulang).',
+    catatan_untuk_ai: 'posisi_terakhir/juz_sekarang cuma LOKASI baca (bisa jadi user memang mulai dari situ, bukan berarti progress banyak). Progress SEBENARNYA ada di kartu_ditempuh (jumlah kartu yang sudah dibaca sejak mulai) dan selisih_dari_target (sudah final, pakai apa adanya, JANGAN dihitung ulang).',
   };
 }
 
