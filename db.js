@@ -261,6 +261,10 @@ tambahKolomJikaBelumAda('users', 'tawaran_tilawah_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'tawaran_alkahfi_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'reminder_jumat_laki_aktif', 'INTEGER DEFAULT 1');
 tambahKolomJikaBelumAda('users', 'bentuk_bacaan', "TEXT DEFAULT 'kartu'"); // 'kartu' | 'reminder'
+// Urutan kartu yang user baru baca SEBAGIAN (lapor ayat di tengah kartu). Boleh null. Dipakai supaya
+// "lanjut" mengirim kartu itu lagi (bukan loncat ke kartu berikutnya). Hanya berlaku selama sama dengan
+// last_sent_bacaan_id (lihat getKartuBelumTuntas), jadi perubahan posisi lain otomatis membatalkannya.
+tambahKolomJikaBelumAda('users', 'kartu_belum_tuntas', 'INTEGER');
 
 // Migrasi (idempotent): user yang cuma lapor manual tidak pernah dapat tanggal_mulai_baca
 // (dulu cuma diisi saat kirim kartu), sehingga hitungSisaProgressUser menganggap mereka
@@ -612,6 +616,28 @@ function updateUserFields(jid, data) {
   db.prepare(`UPDATE users SET ${setClause} WHERE jid = ?`).run(...values, jid);
 }
 
+// ===== Kartu belum tuntas (laporan ayat di tengah kartu) =====
+function setKartuBelumTuntas(jid, urutanAtauNull) {
+  db.prepare('UPDATE users SET kartu_belum_tuntas = ? WHERE jid = ?').run(urutanAtauNull ?? null, jid);
+}
+
+// Urutan kartu yang masih perlu dikirim ulang, atau null. Hanya sah selama masih sama dengan posisi
+// terakhir user; kalau posisinya sudah berubah (kirim lanjut, koreksi, dll) penanda dianggap basi.
+function getKartuBelumTuntas(jid) {
+  const u = db.prepare('SELECT kartu_belum_tuntas, last_sent_bacaan_id FROM users WHERE jid = ?').get(jid);
+  if (!u || !u.kartu_belum_tuntas) return null;
+  return u.kartu_belum_tuntas === u.last_sent_bacaan_id ? u.kartu_belum_tuntas : null;
+}
+
+// Apakah ayat yang dilaporkan sudah mencapai UJUNG kartu ini? Kartu yang melintasi dua surat dianggap
+// tuntas hanya kalau laporannya di surat penutup kartu dan ayatnya sudah sampai ayat_selesai.
+function laporanMenuntaskanKartu(bacaan, namaSurat, nomorAyat) {
+  if (!bacaan) return true;
+  const nama = String(namaSurat || '').trim().toLowerCase();
+  if (!nama || !String(bacaan.surat_selesai).toLowerCase().includes(nama)) return false;
+  return Number(nomorAyat) >= bacaan.ayat_selesai;
+}
+
 // Hitung hari berjalan sejak mulai baca (dipakai tool get_progress_user)
 function hitungHariBerjalanUser(jid) {
   const user = getUser(jid);
@@ -660,8 +686,29 @@ function bulatkanHalaman(h) {
   return h >= 10 ? Math.round(h) : Math.round(h * 10) / 10;
 }
 
-// Input dalam KARTU. Output: kartu (bilangan bulat) kalau < 1 juz, juz (bulat) kalau lebih.
-// Satuan tampilan ke user = KARTU, bukan halaman mushaf (user membaca kartu Dawam).
+// Satuan tampilan ke user = PERSEN (bukan kartu/halaman). Angka kartu hanya dipakai di dalam sistem.
+// Persen capaian target harian dari kartu hari ini; selisihnya dihitung dari persen yang sama
+// supaya "capaian" + "kurang" selalu pas 100.
+function hitungPersenTargetHarian(kartuHariIni, kartuTarget) {
+  if (!(kartuTarget > 0)) return null;
+  return Math.round((kartuHariIni / kartuTarget) * 100);
+}
+
+function formatSelisihPersen(status, persenMentah) {
+  if (persenMentah === null || persenMentah === undefined) return null;
+  if (status === 'SUDAH_CAPAI_PACE') return `lebih ${Math.max(1, persenMentah - 100)}%`;
+  if (status === 'DI_BAWAH_PACE') return `kurang ${Math.max(1, 100 - persenMentah)}%`;
+  return 'pas 100%';
+}
+
+// Persen progres menuju khatam (1 desimal), dari jarak tempuh dalam kartu.
+function persenProgresKeseluruhan(kartuDitempuh) {
+  const total = totalKartuKeseluruhan();
+  if (!total) return 0;
+  return Math.round((kartuDitempuh / total) * 1000) / 10;
+}
+
+// Input dalam KARTU. Output: juz (bulat). Dipertahankan untuk kompatibilitas pemanggil lama.
 function formatSelisihUntukTampilan(selisihKartuAbs) {
   if (selisihKartuAbs < rataKartuPerJuz()) {
     return { satuan: 'kartu', nilai: Math.round(selisihKartuAbs) };
@@ -729,6 +776,7 @@ function hitungSisaProgressUser(jid) {
       kartu_posisi_sekarang: posisiSekarang,
       kartu_ditempuh: halamanDitempuh,
       total_kartu_keseluruhan: totalKartuKeseluruhan(),
+      persen_progres_keseluruhan: persenProgresKeseluruhan(halamanDitempuh),
       sudah_baca_hari_ini: user.tanggal_terakhir_baca === hariIniISOAwal,
       // null = memang tidak relevan dihitung (belum ada target/belum mulai), BUKAN 0%.
       // Konsumen (rekap) WAJIB tampilkan field ini -- null ditampilkan sebagai "-" bukan di-skip.
@@ -751,6 +799,7 @@ function hitungSisaProgressUser(jid) {
       kartu_posisi_sekarang: posisiSekarang,
       kartu_ditempuh: halamanDitempuh,
       total_kartu_keseluruhan: totalKartuKeseluruhan(),
+      persen_progres_keseluruhan: persenProgresKeseluruhan(halamanDitempuh),
     };
   }
 
@@ -767,11 +816,10 @@ function hitungSisaProgressUser(jid) {
   else if (selisihHalaman < 0) status = 'SUDAH_CAPAI_PACE';
   else status = 'PAS_PACE';
 
-  const tampilan = formatSelisihUntukTampilan(Math.abs(selisihHalaman));
   // Cap ke 100% begitu capai/lewat target hari ini -- user yang jauh melampaui target
   // (misal baca banyak sekaligus) tetap ditampilkan 100%, bukan 130%/200% dst, karena
   // "progress hari ini" secara konsep selesai begitu nyampe 100%, sisanya kelebihan.
-  const persenPaceMentah = halamanTarget > 0 ? Math.round((halamanDitempuhHariIni / halamanTarget) * 100) : null;
+  const persenPaceMentah = hitungPersenTargetHarian(halamanDitempuhHariIni, halamanTarget);
   const persenPace = persenPaceMentah !== null
     ? (status === 'SUDAH_CAPAI_PACE' || status === 'PAS_PACE' ? 100 : persenPaceMentah)
     : null;
@@ -790,7 +838,10 @@ function hitungSisaProgressUser(jid) {
     total_kartu_keseluruhan: totalKartuKeseluruhan(),
     status,
     selisih_kartu: selisihHalaman,
-    selisih_tampilan: `${status === 'SUDAH_CAPAI_PACE' ? 'lebih' : 'kurang'} ${tampilan.nilai} ${tampilan.satuan}`,
+    // Yang boleh disebut ke user: persen. Contoh "kurang 40%" / "lebih 15%" / "pas 100%".
+    selisih_tampilan: formatSelisihPersen(status, persenPaceMentah),
+    persen_target_hari_ini: persenPaceMentah, // tidak di-cap (bisa >100), buat AI kalau perlu
+    persen_progres_keseluruhan: persenProgresKeseluruhan(halamanDitempuh),
     persen_pace: persenPace,
     sudah_baca_hari_ini: sudahBacaHariIni,
   };
@@ -1039,13 +1090,12 @@ function getRekapProgressGroup(groupJid) {
       sudah_aktivasi_personal: true,
       posisi_terakhir: bacaan?.surat_ayat || 'belum mulai baca',
       juz_sekarang: bacaan?.juz ?? null,
-      kartu_ditempuh: sisaProgress.kartu_ditempuh ?? 0,
+      persen_progres_keseluruhan: sisaProgress.persen_progres_keseluruhan ?? 0,
       target_hari_per_juz: user.target_juz_per_hari || 'belum ditentukan',
       status_pace: sisaProgress.status || null,
       selisih_dari_target: sisaProgress.selisih_tampilan || null,
       persen_pace: sisaProgress.persen_pace ?? null,
-      kartu_ditempuh_hari_ini: sisaProgress.kartu_ditempuh_hari_ini ?? null,
-      kartu_target_hari_ini: sisaProgress.kartu_target_hari_ini ?? null,
+      ada_target_harian: sisaProgress.ada_target === true,
       sudah_baca_hari_ini: sisaProgress.sudah_baca_hari_ini ?? false,
     };
   });
@@ -1315,6 +1365,10 @@ module.exports = {
   sudahKhatamSetelahKirim,
   hitungTargetHarian,
   rataKartuPerJuz,
+  setKartuBelumTuntas,
+  getKartuBelumTuntas,
+  laporanMenuntaskanKartu,
+  persenProgresKeseluruhan,
   hitungPersenMingguan,
   setLogBacaanHarian,
   JUMLAH_HALAMAN_MUSHAF,

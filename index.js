@@ -35,6 +35,9 @@ const {
   pathIndoDariKode,
   cariBacaanBySuratLike,
   updateLastSentBacaanId,
+  getKartuBelumTuntas,
+  setKartuBelumTuntas,
+  getLogBacaanHarianByTanggal,
   setTanggalMulaiBaca,
   setStartBacaanId,
   setTanggalTerakhirBaca,
@@ -806,7 +809,7 @@ function buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, target, selisih
 
   let bagianPace = '';
   if (statusPace === 'DI_BAWAH_PACE') {
-    bagianPace = ` User punya target cepat (1 juz per ${target} hari) dan statusnya "${selisihTampilan}" dari target hari ini (field ini SUDAH termasuk kata "kurang"/"lebih" di depannya, jangan ditambah kata "kurang" lagi). WAJIB sebutkan angka ini APA ADANYA secara konkret di tengah kalimat (contoh gaya: "tinggal ${selisihTampilan} lagi buat nutup target hari ini, dikit banget!"), jangan dikonversi ulang/dihitung ulang, lalu beri semangat singkat.`;
+    bagianPace = ` User punya target cepat (1 juz per ${target} hari) dan statusnya "${selisihTampilan}" dari target hari ini (field ini berupa PERSEN dan SUDAH termasuk kata "kurang"/"lebih" di depannya, jangan ditambah kata "kurang" lagi). WAJIB sebutkan angka persen ini APA ADANYA secara konkret di tengah kalimat (contoh gaya: "${selisihTampilan} lagi buat nutup target hari ini, dikit banget!"), jangan dikonversi ulang/dihitung ulang, jangan menyebut jumlah kartu/halaman, lalu beri semangat singkat.`;
   } else if (statusPace === 'SUDAH_CAPAI_PACE') {
     bagianPace = ` User SUDAH mencapai 100% target pace hari ini (1 juz per ${target} hari), malah ${selisihTampilan} dari target. WAJIB sebutkan eksplisit bahwa target hari ini sudah tercapai/100% (jangan cuma tersirat) dan beri apresiasi hangat.`;
   }
@@ -848,11 +851,17 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
   let barusanKhatamSekaliSaja = false;
   let bacaanTerakhirTerkirim = null;
   let jumlahBerhasilTerkirim = 0;
+  let kartuLanjutanDikirim = false;
+
+  // Kartu yang tadi baru dibaca sebagian (user lapor ayat di tengah kartu): kirim kartu itu LAGI dulu,
+  // baru lanjut ke kartu berikutnya kalau batch-nya lebih dari satu.
+  const kartuBelumTuntas = getKartuBelumTuntas(jid);
 
   for (let i = 0; i < jumlahKartuPerKirim; i++) {
+    const ulangKartuSisa = i === 0 && kartuBelumTuntas !== null;
     const urutanSebelumWrap = urutanSekarang + 1;
-    let nextUrutan = urutanSebelumWrap;
-    if (nextUrutan > urutanMax) nextUrutan = urutanMin;
+    let nextUrutan = ulangKartuSisa ? kartuBelumTuntas : urutanSebelumWrap;
+    if (!ulangKartuSisa && nextUrutan > urutanMax) nextUrutan = urutanMin;
 
     const bacaan = getBacaanByUrutan(nextUrutan);
     if (!bacaan) {
@@ -866,20 +875,30 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
       break;
     }
 
-    // Khatam: (1) satu putaran penuh dari titik start user (berlaku untuk start di mana pun),
-    // atau (2) aturan lama berbasis wrap (menjaga user yang sedang tepat di kartu terakhir).
-    const khatamPutaranPenuh = sudahKhatamSetelahKirim(startBacaanId, urutanSekarang, nextUrutan);
-    const khatamWrapLama = sudahKhatamSetelahWrap(startBacaanId, urutanSebelumWrap, nextUrutan);
-    if (khatamPutaranPenuh || khatamWrapLama) {
-      startBacaanId = khatamPutaranPenuh ? nextUrutan : (nextUrutan - 1 < urutanMin ? urutanMax : nextUrutan - 1);
-      setStartBacaanId(jid, startBacaanId);
-      barusanKhatamSekaliSaja = true;
+    if (ulangKartuSisa) {
+      // Posisi tidak berubah (user sudah di kartu ini). Kreditnya sudah masuk kalau laporannya hari ini;
+      // kalau laporannya hari lain, sisa kartu ini yang dibaca hari ini dihitung 1 kartu.
+      setKartuBelumTuntas(jid, null);
+      const logHariIni = getLogBacaanHarianByTanggal(jid, hariIniISO);
+      const sudahDikredit = logHariIni && logHariIni.bacaan_id_akhir === nextUrutan;
+      catatLogBacaanHarian(jid, hariIniISO, nextUrutan, bacaan.surat_ayat, null, sudahDikredit ? 0 : 1);
+      kartuLanjutanDikirim = true;
+    } else {
+      // Khatam: (1) satu putaran penuh dari titik start user (berlaku untuk start di mana pun),
+      // atau (2) aturan lama berbasis wrap (menjaga user yang sedang tepat di kartu terakhir).
+      const khatamPutaranPenuh = sudahKhatamSetelahKirim(startBacaanId, urutanSekarang, nextUrutan);
+      const khatamWrapLama = sudahKhatamSetelahWrap(startBacaanId, urutanSebelumWrap, nextUrutan);
+      if (khatamPutaranPenuh || khatamWrapLama) {
+        startBacaanId = khatamPutaranPenuh ? nextUrutan : (nextUrutan - 1 < urutanMin ? urutanMax : nextUrutan - 1);
+        setStartBacaanId(jid, startBacaanId);
+        barusanKhatamSekaliSaja = true;
+      }
+
+      updateLastSentBacaanId(jid, nextUrutan);
+      catatLogBacaanHarian(jid, hariIniISO, nextUrutan, bacaan.surat_ayat, null); // status final dihitung di akhir batch
+      urutanSekarang = nextUrutan;
     }
 
-    updateLastSentBacaanId(jid, nextUrutan);
-    catatLogBacaanHarian(jid, hariIniISO, nextUrutan, bacaan.surat_ayat, null); // status final dihitung di akhir batch
-
-    urutanSekarang = nextUrutan;
     bacaanTerakhirTerkirim = bacaan;
     jumlahBerhasilTerkirim++;
 
@@ -903,16 +922,17 @@ async function kirimBacaanLanjutanUntukAgent(jid) {
   const { status: statusPace, selisihTampilan } = hitungStatusPaceUntukAgent(jid);
   console.log(`✅ [Agent] ${jumlahBerhasilTerkirim} kartu ${jenisDikirim} terkirim ke ${jid}, terakhir: ${bacaanTerakhirTerkirim.surat_ayat}`);
 
-  const catatanJumlahKartu = jumlahBerhasilTerkirim > 1
-    ? ` (total ${jumlahBerhasilTerkirim} kartu baru saja dikirim sekaligus sesuai temponya, bukan cuma 1 -- boleh disebutkan sekilas kalau pas, tapi tidak wajib didetailkan satu-satu.)`
-    : '';
+  const catatanJumlahKartu = (jumlahBerhasilTerkirim > 1
+    ? ' (Beberapa kartu dikirim sekaligus sesuai temponya. JANGAN menyebut jumlah kartunya.)'
+    : '') + (kartuLanjutanDikirim
+    ? ' (Kartu pertama yang dikirim adalah kartu yang tadi baru dibaca sebagian oleh user -- sebutkan singkat bahwa Dawam kirim lagi kartu tadi supaya bisa dituntaskan, lalu lanjutannya.)'
+    : '');
 
   return {
     sukses: true,
     surat_ayat: bacaanTerakhirTerkirim.surat_ayat,
     juz: bacaanTerakhirTerkirim.juz,
     jenis_dikirim: jenisDikirim,
-    jumlah_kartu_terkirim: jumlahBerhasilTerkirim,
     barusan_khatam: barusanKhatamSekaliSaja,
     catatan_untuk_ai: (barusanKhatamSekaliSaja
       ? `User BARU SAJA KHATAM! Muter penuh dari titik mulainya dan sekarang kembali ke sana. Ucapkan selamat/apresiasi besar atas pencapaian khatamnya dengan hangat, sebelum lanjut ke catatan progress biasa berikut: ${buatCatatanSetelahKirimBacaan(modeArabSaja, statusPace, user.target_juz_per_hari, selisihTampilan, bacaanTerakhirTerkirim.surat_ayat, user.name)}`
@@ -1337,7 +1357,7 @@ function formatRekapMingguanTerstruktur(groupJid) {
   for (const b of baris) {
     const emoji = b.hari_aktif >= 6 ? '🔥' : b.hari_aktif >= 3 ? '📖' : b.hari_aktif > 0 ? '🌱' : '💤';
     const persenTampilan = b.persen_pace_mingguan !== null ? `${b.persen_pace_mingguan}%` : '-';
-    teks += `${emoji} *${b.nama}* — aktif ${b.hari_aktif}/7 hari, ${b.total_kartu} kartu dibaca\n`;
+    teks += `${emoji} *${b.nama}* — aktif ${b.hari_aktif}/7 hari\n`;
     teks += `   posisi akhir minggu: ${b.posisi_akhir_minggu} (rata-rata ${persenTampilan} capaian target harian minggu ini)`;
     teks += '\n\n';
   }
@@ -1400,7 +1420,7 @@ function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
   for (const d of sudahAktif) {
     // Belum ada target harian yang terhitung (target belum diset / belum pernah mulai baca):
     // persennya memang tidak bisa dihitung, JANGAN dipaksa tampil "0%" karena menyesatkan.
-    if (d.kartu_target_hari_ini === null || d.kartu_target_hari_ini === undefined) {
+    if (!d.ada_target_harian) {
       teks += d.sudah_baca_hari_ini
         ? `✅ *${d.nama}* — sudah baca hari ini (target harian belum terhitung)\n\n`
         : `💤 *${d.nama}* — belum mulai tilawah (target harian belum terhitung)\n\n`;
@@ -1418,12 +1438,8 @@ function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
 
     const emoji = d.persen_pace === 0 || persenTampilan === '0%' ? '💤' : d.status_pace === 'SUDAH_CAPAI_PACE' ? '🎉' : d.status_pace === 'DI_BAWAH_PACE' ? '📖' : '✅';
 
-    // Keterangan kartu (bilangan bulat, satuan yang sama dengan yang dibaca user) -- cuma
-    // ditampilkan kalau user punya target harian.
-    const ditempuh = d.kartu_ditempuh_hari_ini ?? 0;
-    const keteranganKartu = ` (${ditempuh}/${d.kartu_target_hari_ini} kartu)`;
-
-    teks += `${emoji} *${d.nama}* — ${persenTampilan} dari target harian${keteranganKartu}\n\n`;
+    // Laporan ke user HANYA persen (tanpa jumlah kartu/halaman).
+    teks += `${emoji} *${d.nama}* — ${persenTampilan} dari target harian\n\n`;
   }
 
   if (belumAktif.length > 0) {

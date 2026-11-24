@@ -66,7 +66,7 @@ const TOOLS_PERSONAL = [
         properties: {
           jumlah_kartu: {
             type: 'number',
-            description: 'Jumlah KARTU yang BARU SAJA dibaca user HARI INI (satuan resmi Dawam, bilangan bulat). Kalau user cuma bilang "udah baca" tanpa angka/kuantitas sama sekali, JANGAN panggil tool ini -- tanya dulu kira-kira berapa kartu.',
+            description: 'Jumlah KARTU yang BARU SAJA dibaca user HARI INI (satuan resmi Dawam, bilangan bulat). Kalau user cuma bilang "udah baca" tanpa angka/kuantitas sama sekali, JANGAN panggil tool ini -- tanya dulu bacaannya (paling enak surat+ayat dari mana sampai mana; kalau cuma bisa jumlah, tanyakan perkiraannya).',
           },
           jumlah_halaman: {
             type: 'number',
@@ -400,7 +400,7 @@ const TOOLS_GRUP = [
     type: 'function',
     function: {
       name: 'lapor_bacaan_manual',
-      description: 'Catat laporan bacaan (perkiraan jumlah KARTU) milik ORANG YANG BICARA di grup ini, supaya masuk rekap harian. WAJIB panggil kalau si pengirim pesan melaporkan sudah baca sekian kartu hari ini; tanpa pemanggilan tool ini laporannya TIDAK tercatat. Hanya untuk pengirim pesan sendiri, bukan untuk orang lain. Kalau pengirim cuma bilang "udah baca" tanpa angka sama sekali, JANGAN panggil, tanya dulu kira-kira berapa kartu.',
+      description: 'Catat laporan bacaan (perkiraan jumlah KARTU) milik ORANG YANG BICARA di grup ini, supaya masuk rekap harian. WAJIB panggil kalau si pengirim pesan melaporkan sudah baca sekian kartu hari ini; tanpa pemanggilan tool ini laporannya TIDAK tercatat. Hanya untuk pengirim pesan sendiri, bukan untuk orang lain. Kalau pengirim cuma bilang "udah baca" tanpa angka sama sekali, JANGAN panggil, tanya dulu bacaannya (paling enak surat+ayat dari mana sampai mana; kalau cuma bisa jumlah, tanyakan perkiraannya).',
       parameters: {
         type: 'object',
         properties: {
@@ -519,9 +519,8 @@ async function eksekusiLaporBacaanManual(args, konteks) {
     const sisa = db.hitungSisaProgressUser(konteks.jid);
     return {
       sukses: false,
-      kartu_target_hari_ini: sisa.kartu_target_hari_ini ?? null,
       target_juz_per_hari: user.target_juz_per_hari || 'belum ditentukan',
-      catatan_untuk_ai: `Angka yang dilaporkan user (${Number.isFinite(jumlah_kartu) ? jumlah_kartu : 'tidak jelas'} kartu) kelihatan tidak masuk akal. JANGAN dicatat. Tegur dengan lembut, minta user infokan ulang jumlah kartu yang lebih jelas/masuk akal ke Dawam, dan sebutkan target hariannya biar ada acuan: 1 juz per ${user.target_juz_per_hari || '?'} hari (sekitar ${sisa.kartu_target_hari_ini ?? '?'} kartu/hari).`,
+      catatan_untuk_ai: `Angka yang dilaporkan user kelihatan tidak masuk akal (tidak jelas atau terlalu besar untuk satu hari). JANGAN dicatat. Tegur dengan lembut, minta user infokan ulang bacaannya dengan lebih jelas -- paling gampang sebut surat+ayat dari mana sampai mana -- dan sebutkan targetnya biar ada acuan: 1 juz per ${user.target_juz_per_hari || '?'} hari. JANGAN menyebut angka kartu/halaman.`,
     };
   }
 
@@ -533,12 +532,9 @@ async function eksekusiLaporBacaanManual(args, konteks) {
   const totalSetelahIni = sudahDilaporkanHariIni + jumlah_kartu;
 
   if (totalSetelahIni > BATAS_WAJAR_PER_HARI) {
-    const sisa = db.hitungSisaProgressUser(konteks.jid);
     return {
       sukses: false,
-      sudah_dilaporkan_hari_ini: sudahDilaporkanHariIni,
-      kartu_target_hari_ini: sisa.kartu_target_hari_ini ?? null,
-      catatan_untuk_ai: `User sudah lapor ${sudahDilaporkanHariIni} kartu hari ini, ditambah laporan baru ${jumlah_kartu} kartu jadi total ${totalSetelahIni} -- ini kelihatan tidak masuk akal untuk satu hari. JANGAN dicatat. Tegur dengan lembut, tanya ulang apakah ini laporan susulan dari hari lain (bukan hari ini) atau memang ada salah sebut angka.`,
+      catatan_untuk_ai: 'Digabung dengan laporan user sebelumnya hari ini, total bacaannya kelihatan tidak masuk akal untuk satu hari. JANGAN dicatat. Tegur dengan lembut, tanya ulang apakah ini laporan susulan dari hari lain (bukan hari ini) atau memang ada salah sebut. JANGAN menyebut angka kartu/halaman.',
     };
   }
 
@@ -555,16 +551,14 @@ async function eksekusiLaporBacaanManual(args, konteks) {
 
   return {
     sukses: true,
-    kartu_dilaporkan: jumlah_kartu,
-    kartu_ditempuh_hari_ini: sisa.kartu_ditempuh_hari_ini,
-    kartu_target_hari_ini: sisa.kartu_target_hari_ini,
+    persen_target_hari_ini: sisa.persen_target_hari_ini ?? null,
     status_pace: sisa.status,
     selisih_dari_target: sisa.selisih_tampilan,
     gap_hari_tanpa_lapor: gapHari,
     mode_saat_ini: modeKartu ? 'kartu' : 'reminder',
     catatan_untuk_ai: (gapHari !== null && gapHari >= 2
       ? `Laporan berhasil dicatat. PENTING: user baru lapor lagi setelah ${gapHari} hari tidak ada laporan sama sekali. Sebelum/sesudah apresiasi progress hari ini, tanyakan dengan natural dan tanpa menghakimi apakah beberapa hari kemarin sempat baca juga (dari app/mushaf lain) tapi belum sempat lapor, atau memang belum sempat tilawah -- biar progressnya tetap akurat.`
-      : 'Laporan berhasil dicatat. Apresiasi singkat, sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).') + catatanModeKartu,
+      : 'Laporan berhasil dicatat. Apresiasi singkat, sebutkan progress terhadap target hari ini dalam PERSEN APA ADANYA (jangan hitung ulang sendiri, jangan sebut angka kartu/halaman).') + catatanModeKartu,
   };
 }
 
@@ -649,6 +643,11 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat: nomorAyatMent
   // kirim_bacaan_lanjutan yang selalu nambah incremental.
   db.updateLastSentBacaanId(konteks.jid, bacaanDitemukan.urutan);
 
+  // Kalau ayat yang dilaporkan ada di TENGAH kartu, kartu itu ditandai belum tuntas: kredit harian tetap
+  // dihitung utuh (kartu = satuan), tapi "lanjut" berikutnya mengirim kartu yang sama lagi.
+  const kartuTuntas = db.laporanMenuntaskanKartu(bacaanDitemukan, nama_surat, nomor_ayat);
+  db.setKartuBelumTuntas(konteks.jid, kartuTuntas ? null : bacaanDitemukan.urutan);
+
   const hariIniISO = db.tanggalHariIniISO();
   db.setTanggalTerakhirBaca(konteks.jid, hariIniISO);
   db.pastikanTanggalMulaiBaca(konteks.jid, hariIniISO);
@@ -670,16 +669,15 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat: nomorAyatMent
     posisi_sebelumnya: posisiSebelumnya?.surat_ayat || null,
     posisi_baru: bacaanDitemukan.surat_ayat,
     posisi_mulai: bacaanAwal ? bacaanAwal.surat_ayat : null,
-    kartu_dilaporkan: jumlahKartuBaru,
-    kartu_ditempuh_hari_ini: sisa.kartu_ditempuh_hari_ini,
-    kartu_target_hari_ini: sisa.kartu_target_hari_ini,
+    persen_target_hari_ini: sisa.persen_target_hari_ini ?? null,
+    kartu_berikutnya_melanjutkan_kartu_ini: !kartuTuntas,
     status_pace: sisa.status,
     selisih_dari_target: sisa.selisih_tampilan,
     gap_hari_tanpa_lapor: gapHari,
     mode_saat_ini: modeKartu ? 'kartu' : 'reminder',
     catatan_untuk_ai: (gapHari !== null && gapHari >= 2
       ? `Posisi berhasil disinkronkan dari "${posisiSebelumnya?.surat_ayat || 'belum ada posisi sebelumnya'}" ke "${bacaanDitemukan.surat_ayat}". PENTING: user baru lapor lagi setelah ${gapHari} hari tidak ada laporan. Tanyakan natural tanpa menghakimi apakah beberapa hari kemarin sempat baca juga tapi belum lapor. Sebutkan juga progress konkret (dari...ke...) dan status terhadap target hari ini apa adanya.`
-      : `Posisi berhasil disinkronkan dari "${posisiSebelumnya?.surat_ayat || 'belum ada posisi sebelumnya'}" ke "${bacaanDitemukan.surat_ayat}". Sebutkan progress ini dengan konkret (dari...ke..., atau sekian kartu), apresiasi singkat, dan sebutkan progress terhadap target hari ini APA ADANYA (jangan hitung ulang sendiri).`) + catatanModeKartu,
+      : `Posisi berhasil disinkronkan dari "${posisiSebelumnya?.surat_ayat || 'belum ada posisi sebelumnya'}" ke "${bacaanDitemukan.surat_ayat}". Sebutkan progress ini dengan konkret (dari...ke...), apresiasi singkat, dan sebutkan progress terhadap target hari ini dalam PERSEN APA ADANYA (jangan hitung ulang sendiri, jangan sebut angka kartu/halaman).`) + (kartuTuntas ? '' : ' Karena ayat terakhir yang dilaporkan ada di tengah kartu, kalau nanti user minta lanjut, Dawam akan mengirim kartu yang sama lagi supaya sisanya bisa dituntaskan -- sebutkan itu sekilas kalau pas.') + catatanModeKartu,
   };
 }
 
@@ -728,8 +726,8 @@ async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_a
     if (jumlahKartuTimpa !== null && jumlahKartuTimpa > BATAS_KARTU_PER_HARI) {
       return {
         sukses: false,
-        pesan: `Jumlah kartu ${jumlahKartuTimpa} melebihi batas wajar per hari (${BATAS_KARTU_PER_HARI}).`,
-        catatan_untuk_ai: `Angka ${jumlahKartuTimpa} kartu untuk satu hari kelihatan tidak masuk akal (batas wajar ${BATAS_KARTU_PER_HARI}). JANGAN dikoreksi; tanyakan dengan lembut apakah ada salah sebut titik mulai/akhir atau ini gabungan beberapa hari.`,
+        pesan: 'Jumlah bacaan yang disebut melebihi batas wajar satu hari.',
+        catatan_untuk_ai: 'Bacaan sebanyak itu untuk satu hari kelihatan tidak masuk akal. JANGAN dikoreksi; tanyakan dengan lembut apakah ada salah sebut titik mulai/akhir atau ini gabungan beberapa hari. JANGAN menyebut angka kartu/halaman.',
       };
     }
   }
@@ -764,6 +762,7 @@ async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_a
   if (jenis_koreksi === 'posisi_sekarang') {
     const posisiSebelumnya = db.getBacaanByUrutan(db.getUser(konteks.jid).last_sent_bacaan_id);
     db.updateLastSentBacaanId(konteks.jid, bacaanDitemukan.urutan);
+    db.setKartuBelumTuntas(konteks.jid, null);
 
     return {
       sukses: true,
@@ -796,6 +795,7 @@ async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_a
     // Kalau yang dikoreksi adalah tanggal hari ini, sinkronkan juga posisi utamanya.
     if (mundur === 0) {
       db.updateLastSentBacaanId(konteks.jid, bacaanDitemukan.urutan);
+      db.setKartuBelumTuntas(konteks.jid, null);
     }
 
     return {
@@ -803,8 +803,8 @@ async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_a
       tanggal_dikoreksi: tanggalISO,
       posisi_baru: bacaanDitemukan.surat_ayat,
       posisi_mulai: bacaanAwal ? bacaanAwal.surat_ayat : null,
-      kartu_setelah_koreksi: jumlahKartuTimpa,
-      catatan_untuk_ai: `Catatan tanggal ${tanggalISO} berhasil dikoreksi jadi "${bacaanDitemukan.surat_ayat}"${jumlahKartuTimpa !== null ? `, total ${jumlahKartuTimpa} kartu untuk tanggal itu (menimpa catatan sebelumnya)` : ''}. Konfirmasi ke user dengan hangat bahwa sudah dibetulkan.`,
+      persen_target_hari_ini: mundur === 0 ? (db.hitungSisaProgressUser(konteks.jid).persen_target_hari_ini ?? null) : null,
+      catatan_untuk_ai: `Catatan tanggal ${tanggalISO} berhasil dikoreksi jadi "${bacaanDitemukan.surat_ayat}"${jumlahKartuTimpa !== null ? ', dan jumlah bacaan tanggal itu sudah ditimpa dengan yang benar' : ''}. Konfirmasi ke user dengan hangat bahwa sudah dibetulkan${mundur === 0 ? ' dan sebutkan capaian hari ini dalam PERSEN dari persen_target_hari_ini' : ''} (jangan sebut angka kartu/halaman).`,
     };
   }
 
@@ -828,15 +828,14 @@ async function eksekusiGetProgressUser(_, konteks) {
     sukses: true,
     posisi_terakhir: bacaan?.surat_ayat || 'belum mulai membaca',
     juz_sekarang: bacaan?.juz ?? null,
-    kartu_posisi_sekarang: sisaProgress.kartu_posisi_sekarang,
-    kartu_ditempuh: sisaProgress.kartu_ditempuh,
-    total_kartu_keseluruhan: sisaProgress.total_kartu_keseluruhan,
+    persen_progres_keseluruhan: sisaProgress.persen_progres_keseluruhan,
+    persen_target_hari_ini: sisaProgress.persen_target_hari_ini ?? null,
     target_hari_per_juz: user.target_juz_per_hari || 'belum ditentukan',
     hari_berjalan: db.hitungHariBerjalanUser(konteks.jid),
     mode_saat_ini: user.mode_baca_arab_saja === 1 ? 'arab' : 'terjemah-saja (halangan)',
     status_pace: sisaProgress.status || null,
     selisih_dari_target: sisaProgress.selisih_tampilan || null,
-    catatan_untuk_ai: 'posisi_terakhir/juz_sekarang cuma LOKASI baca (bisa jadi user memang mulai dari situ, bukan berarti progress banyak). Progress SEBENARNYA ada di kartu_ditempuh (jumlah kartu yang sudah dibaca sejak mulai) dan selisih_dari_target (sudah final, pakai apa adanya, JANGAN dihitung ulang).',
+    catatan_untuk_ai: 'posisi_terakhir/juz_sekarang cuma LOKASI baca (bisa jadi user memang mulai dari situ, bukan berarti progress banyak). Progress SEBENARNYA: persen_progres_keseluruhan (persen menuju khatam sejak mulai), persen_target_hari_ini (capaian hari ini) dan selisih_dari_target (sudah final, pakai apa adanya, JANGAN dihitung ulang). Sebut progres HANYA dalam persen, jangan sebut angka kartu/halaman.',
   };
 }
 
@@ -861,6 +860,7 @@ async function eksekusiSetPosisiBacaan({ nama_surat }, konteks) {
     return { sukses: false, pesan: `Surat "${nama_surat}" tidak ditemukan di data bacaan.` };
   }
   db.updateLastSentBacaanId(konteks.jid, bacaan.urutan - 1);
+  db.setKartuBelumTuntas(konteks.jid, null);
   db.setStartBacaanId(konteks.jid, bacaan.urutan - 1);
   return {
     sukses: true,
