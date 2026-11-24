@@ -110,7 +110,7 @@ const TOOLS_PERSONAL = [
     type: 'function',
     function: {
       name: 'koreksi_catatan_bacaan',
-      description: 'Perbaiki catatan bacaan yang SALAH tercatat oleh Dawam, berdasarkan komplain/koreksi eksplisit dari user (misal "itu salah, aku kemarin baca lebih banyak", "posisiku bukan di situ, harusnya..."). WAJIB konfirmasi dulu detail koreksinya ke user sebelum panggil tool ini, dan panggil HANYA setelah user benar-benar mengonfirmasi (bilang "iya"/"benar"/"betul" dsb). JANGAN panggil tool ini untuk laporan bacaan BARU (pakai lapor_bacaan_by_ayat/lapor_bacaan_manual untuk itu) -- ini KHUSUS untuk membetulkan catatan yang SUDAH ada tapi keliru.',
+      description: 'Perbaiki catatan bacaan yang SALAH tercatat oleh Dawam, berdasarkan komplain/koreksi eksplisit dari user (misal "itu salah, aku kemarin baca lebih banyak", "posisiku bukan di situ, harusnya..."). WAJIB konfirmasi dulu detail koreksinya ke user sebelum panggil tool ini, dan panggil HANYA setelah user benar-benar mengonfirmasi (bilang "iya"/"benar"/"betul" dsb). JANGAN panggil tool ini untuk laporan bacaan BARU (pakai lapor_bacaan_by_ayat/lapor_bacaan_manual untuk itu) -- ini KHUSUS untuk membetulkan catatan yang SUDAH ada tapi keliru, TERMASUK kalau jumlah kartu yang tercatat terlalu sedikit/banyak (isi dari_nama_surat+dari_nomor_ayat atau jumlah_kartu supaya total kartu tanggal itu ditimpa dengan angka yang benar).',
       parameters: {
         type: 'object',
         properties: {
@@ -131,6 +131,18 @@ const TOOLS_PERSONAL = [
             type: 'string',
             enum: ['hari_ini', 'kemarin', 'dua_hari_lalu', 'tiga_hari_lalu'],
             description: 'WAJIB diisi kalau jenis_koreksi=log_tanggal_tertentu. Tanggal mana yang mau dikoreksi.',
+          },
+          dari_nama_surat: {
+            type: 'string',
+            description: 'OPSIONAL, hanya untuk log_tanggal_tertentu. Nama surat titik MULAI bacaan yang benar (misal user: "harusnya dari At-Tin ayat 1 sampai An-Nas ayat 6"). Kalau diisi, total kartu tanggal itu DITIMPA dengan jumlah kartu dari titik mulai sampai titik akhir (nama_surat/nomor_ayat).',
+          },
+          dari_nomor_ayat: {
+            type: 'number',
+            description: 'OPSIONAL. Nomor ayat titik mulai; wajib diisi bersama dari_nama_surat.',
+          },
+          jumlah_kartu: {
+            type: 'number',
+            description: 'OPSIONAL, hanya untuk log_tanggal_tertentu. Kalau user menyebut langsung total KARTU yang benar untuk tanggal itu ("harusnya 12 kartu"), isi ini: total kartu tanggal itu DITIMPA (bukan ditambah). Jangan isi kalau dari_nama_surat sudah diisi.',
           },
           alasan_koreksi: {
             type: 'string',
@@ -671,7 +683,7 @@ async function eksekusiLaporBacaanByAyat({ nama_surat, nomor_ayat: nomorAyatMent
   };
 }
 
-async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_ayat, tanggal_relatif, alasan_koreksi }, konteks) {
+async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_ayat, tanggal_relatif, alasan_koreksi, dari_nama_surat, dari_nomor_ayat: dariAyatMentah, jumlah_kartu }, konteks) {
   const bacaanDitemukan = db.cariBacaanBySuratDanAyat(nama_surat, nomor_ayat);
   if (!bacaanDitemukan) {
     return {
@@ -679,6 +691,47 @@ async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_a
       pesan: `Tidak ditemukan card yang mengandung "${nama_surat}" ayat ${nomor_ayat}.`,
       catatan_untuk_ai: 'Data tidak ditemukan untuk ayat ini. Minta maaf dengan lembut, tanyakan apakah user yakin dengan nama surat/nomor ayatnya, atau tawarkan sebut rentang lain yang lebih pas.',
     };
+  }
+
+  // Koreksi JUMLAH KARTU hari itu (hanya log_tanggal_tertentu). Ini koreksi eksplisit dari user, jadi
+  // MENIMPA total kartu tanggal itu (bukan menambah, dan tidak kena aturan anti-hitung-dobel laporan biasa).
+  // Dua cara: sebut titik mulai (jumlah = kartu dari titik mulai sampai titik akhir, inklusif) atau
+  // sebut jumlah_kartu langsung. Tanpa keduanya, koreksi hanya menimpa label/posisi (perilaku lama).
+  let jumlahKartuTimpa = null;
+  let bacaanAwal = null;
+  if (jenis_koreksi === 'log_tanggal_tertentu') {
+    const BATAS_KARTU_PER_HARI = Math.round(db.kartuPerHalaman() * 60);
+    if (typeof dari_nama_surat === 'string' && dari_nama_surat.trim() !== '') {
+      const dariAyat = Math.trunc(Number(dariAyatMentah));
+      bacaanAwal = Number.isFinite(dariAyat) ? db.cariBacaanBySuratDanAyat(dari_nama_surat, dariAyat) : null;
+      if (!bacaanAwal) {
+        return {
+          sukses: false,
+          pesan: `Tidak ditemukan card yang mengandung titik mulai "${dari_nama_surat}" ayat ${dariAyatMentah}.`,
+          catatan_untuk_ai: 'Titik mulai yang disebut tidak ditemukan. Minta maaf dengan lembut dan tanyakan apakah nama surat/nomor ayat awalnya sudah benar.',
+        };
+      }
+      if (bacaanAwal.urutan > bacaanDitemukan.urutan) {
+        return {
+          sukses: false,
+          pesan: 'Titik mulai berada SETELAH titik akhir.',
+          catatan_untuk_ai: `Titik mulai (${bacaanAwal.surat_ayat}) ada setelah titik akhir (${bacaanDitemukan.surat_ayat}) di urutan mushaf. JANGAN dikoreksi dulu; tanyakan dengan lembut apakah ada yang tertukar.`,
+        };
+      }
+      jumlahKartuTimpa = bacaanDitemukan.urutan - bacaanAwal.urutan + 1;
+    } else if (jumlah_kartu !== undefined && jumlah_kartu !== null && jumlah_kartu !== '') {
+      jumlahKartuTimpa = Math.round(Number(jumlah_kartu));
+      if (!Number.isFinite(jumlahKartuTimpa) || jumlahKartuTimpa < 0) {
+        return { sukses: false, pesan: 'jumlah_kartu tidak valid.', catatan_untuk_ai: 'Angka jumlah kartu dari user tidak jelas. Tanyakan ulang dengan lembut berapa kartu yang sebenarnya dia baca.' };
+      }
+    }
+    if (jumlahKartuTimpa !== null && jumlahKartuTimpa > BATAS_KARTU_PER_HARI) {
+      return {
+        sukses: false,
+        pesan: `Jumlah kartu ${jumlahKartuTimpa} melebihi batas wajar per hari (${BATAS_KARTU_PER_HARI}).`,
+        catatan_untuk_ai: `Angka ${jumlahKartuTimpa} kartu untuk satu hari kelihatan tidak masuk akal (batas wajar ${BATAS_KARTU_PER_HARI}). JANGAN dikoreksi; tanyakan dengan lembut apakah ada salah sebut titik mulai/akhir atau ini gabungan beberapa hari.`,
+      };
+    }
   }
 
   // Koreksi yang memindahkan POSISI jauh butuh konfirmasi kedua (lihat koreksiMenunggu).
@@ -728,8 +781,17 @@ async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_a
     const mundur = mapHari[tanggal_relatif] ?? 0;
     const tanggalISO = db.tanggalMundurISO(mundur);
 
-    // Koreksi = TIMPA label/posisi catatan tanggal itu (dulu malah menambah +1 kartu).
-    db.setLogBacaanHarian(konteks.jid, tanggalISO, bacaanDitemukan.urutan, bacaanDitemukan.surat_ayat);
+    // Koreksi = TIMPA label/posisi catatan tanggal itu (dulu malah menambah +1 kartu). Kalau user
+    // menyebut titik mulai atau jumlah kartu, total kartu tanggal itu ikut ditimpa.
+    db.setLogBacaanHarian(konteks.jid, tanggalISO, bacaanDitemukan.urutan, bacaanDitemukan.surat_ayat, {
+      jumlahKartu: jumlahKartuTimpa,
+      bacaanIdAwal: bacaanAwal ? bacaanAwal.urutan : null,
+    });
+    // Kalau hari ini diberi total kartu > 0 lewat koreksi, tandai juga sudah baca hari ini.
+    if (jumlahKartuTimpa !== null && jumlahKartuTimpa > 0 && mundur === 0) {
+      db.setTanggalTerakhirBaca(konteks.jid, tanggalISO);
+      db.pastikanTanggalMulaiBaca(konteks.jid, tanggalISO);
+    }
 
     // Kalau yang dikoreksi adalah tanggal hari ini, sinkronkan juga posisi utamanya.
     if (mundur === 0) {
@@ -740,7 +802,9 @@ async function eksekusiKoreksiCatatanBacaan({ jenis_koreksi, nama_surat, nomor_a
       sukses: true,
       tanggal_dikoreksi: tanggalISO,
       posisi_baru: bacaanDitemukan.surat_ayat,
-      catatan_untuk_ai: `Catatan tanggal ${tanggalISO} berhasil dikoreksi jadi "${bacaanDitemukan.surat_ayat}". Konfirmasi ke user dengan hangat bahwa sudah dibetulkan.`,
+      posisi_mulai: bacaanAwal ? bacaanAwal.surat_ayat : null,
+      kartu_setelah_koreksi: jumlahKartuTimpa,
+      catatan_untuk_ai: `Catatan tanggal ${tanggalISO} berhasil dikoreksi jadi "${bacaanDitemukan.surat_ayat}"${jumlahKartuTimpa !== null ? `, total ${jumlahKartuTimpa} kartu untuk tanggal itu (menimpa catatan sebelumnya)` : ''}. Konfirmasi ke user dengan hangat bahwa sudah dibetulkan.`,
     };
   }
 
