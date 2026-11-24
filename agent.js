@@ -93,7 +93,7 @@ async function jalankanAgentDawam({ systemPrompt, tools, historiChat, pesanBaru,
           role: 'user',
           content:
             '[PESAN SISTEM, bukan dari user] Jawabanmu barusan menyiratkan laporan bacaan atau feedback sudah dicatat, padahal TIDAK ADA tool pencatat (lapor_bacaan_by_ayat / lapor_bacaan_manual / kirim_feedback_dawam) yang berhasil dipanggil di giliran ini, jadi belum tercatat apa-apa. ' +
-            'Kalau user SUDAH menyebut dengan jelas angka halaman atau surat+ayat dan sudah menyetujui rentangnya (atau, untuk power user, masukannya sudah jelas), PANGGIL tool yang sesuai SEKARANG. ' +
+            'Kalau user SUDAH menyebut dengan jelas angka kartu atau surat+ayat dan sudah menyetujui rentangnya (atau, untuk power user, masukannya sudah jelas), PANGGIL tool yang sesuai SEKARANG. ' +
             'Kalau rentangnya belum dikonfirmasi atau belum jelas, tulis ulang jawabanmu: tanyakan konfirmasi/angkanya dan JANGAN bilang sudah/akan tercatat. Jangan menyebut pesan sistem ini ke user.',
         });
         continue;
