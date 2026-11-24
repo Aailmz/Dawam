@@ -109,6 +109,22 @@ const TOOLS_PERSONAL = [
   {
     type: 'function',
     function: {
+      name: 'atur_jeda_tilawah',
+      description: 'Atur JEDA tilawah sementara (break) untuk user: sedang uzur/sakit/safar/sibuk berat dan belum bisa tilawah beberapa hari. Selama jeda Dawam tidak menawari/mengingatkan tilawah, user tidak ditag dan tidak dihitung "belum baca" di rekap grup (tampil sebagai sedang jeda), lalu otomatis kembali setelah tanggal jeda berakhir. Beda dari berhenti total (minta_berhenti_dawam). Isi SATU dari: lama_hari atau sampai_tanggal. Isi akhiri=true kalau user bilang sudah siap tilawah lagi / jedanya selesai. JANGAN menanyakan alasan jeda, cukup tanya berapa lama kalau belum jelas.',
+      parameters: {
+        type: 'object',
+        properties: {
+          lama_hari: { type: 'number', description: 'Berapa hari jeda, dihitung mulai hari ini (1-60). Contoh: "jeda 3 hari" = 3.' },
+          sampai_tanggal: { type: 'string', description: 'Alternatif: tanggal terakhir jeda format YYYY-MM-DD, kalau user menyebut tanggal pasti dan kamu yakin tanggalnya benar. Kalau ragu, pakai lama_hari atau tanya balik.' },
+          akhiri: { type: 'boolean', description: 'true = akhiri jeda sekarang, user kembali ke rekap & pengingat normal.' },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'koreksi_catatan_bacaan',
       description: 'Perbaiki catatan bacaan yang SALAH tercatat oleh Dawam, berdasarkan komplain/koreksi eksplisit dari user (misal "itu salah, aku kemarin baca lebih banyak", "posisiku bukan di situ, harusnya..."). WAJIB konfirmasi dulu detail koreksinya ke user sebelum panggil tool ini, dan panggil HANYA setelah user benar-benar mengonfirmasi (bilang "iya"/"benar"/"betul" dsb). JANGAN panggil tool ini untuk laporan bacaan BARU (pakai lapor_bacaan_by_ayat/lapor_bacaan_manual untuk itu) -- ini KHUSUS untuk membetulkan catatan yang SUDAH ada tapi keliru, TERMASUK kalau jumlah kartu yang tercatat terlalu sedikit/banyak (isi dari_nama_surat+dari_nomor_ayat atau jumlah_kartu supaya total kartu tanggal itu ditimpa dengan angka yang benar).',
       parameters: {
@@ -431,6 +447,22 @@ const TOOLS_GRUP = [
           dari_nomor_ayat: { type: 'number', description: 'OPSIONAL. Nomor ayat titik mulai; wajib diisi bersama dari_nama_surat.' },
         },
         required: ['nama_surat', 'nomor_ayat'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'atur_jeda_tilawah',
+      description: 'Atur JEDA tilawah sementara (break) untuk ORANG YANG BICARA di grup ini (hanya dirinya sendiri): sedang uzur/sakit/safar/sibuk berat dan belum bisa tilawah beberapa hari. Selama jeda Dawam tidak menawari/mengingatkan tilawah, user tidak ditag dan tidak dihitung "belum baca" di rekap grup (tampil sebagai sedang jeda), lalu otomatis kembali setelah tanggal jeda berakhir. Beda dari berhenti total (minta_berhenti_dawam). Isi SATU dari: lama_hari atau sampai_tanggal. Isi akhiri=true kalau user bilang sudah siap tilawah lagi / jedanya selesai. JANGAN menanyakan alasan jeda, cukup tanya berapa lama kalau belum jelas.',
+      parameters: {
+        type: 'object',
+        properties: {
+          lama_hari: { type: 'number', description: 'Berapa hari jeda, dihitung mulai hari ini (1-60). Contoh: "jeda 3 hari" = 3.' },
+          sampai_tanggal: { type: 'string', description: 'Alternatif: tanggal terakhir jeda format YYYY-MM-DD, kalau user menyebut tanggal pasti dan kamu yakin tanggalnya benar. Kalau ragu, pakai lama_hari atau tanya balik.' },
+          akhiri: { type: 'boolean', description: 'true = akhiri jeda sekarang, user kembali ke rekap & pengingat normal.' },
+        },
+        required: [],
       },
     },
   },
@@ -979,6 +1011,49 @@ async function eksekusiTanyaBacaanHariLain({ tanggal_relatif }, konteks) {
   };
 }
 
+async function eksekusiAturJedaTilawah({ lama_hari, sampai_tanggal, akhiri }, konteks) {
+  const user = db.getUser(konteks.jid);
+  if (!user) return { sukses: false, pesan: 'User tidak ditemukan.' };
+
+  if (akhiri === true || akhiri === 'true') {
+    const sebelumnya = db.sedangJeda(user);
+    db.setJedaSampai(konteks.jid, null);
+    return {
+      sukses: true,
+      jeda_aktif: false,
+      catatan_untuk_ai: sebelumnya
+        ? 'Jeda tilawah user sudah diakhiri; pengingat dan rekap kembali normal. Sambut hangat tanpa menekan, boleh tawarkan lanjut baca kapan pun dia siap.'
+        : 'User sebenarnya tidak sedang jeda. Tanggapi santai saja.',
+    };
+  }
+
+  const hariIni = db.tanggalHariIniISO();
+  let sampai = null;
+  if (typeof sampai_tanggal === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(sampai_tanggal.trim())) {
+    const sel = db.selisihHariISO(hariIni, sampai_tanggal.trim());
+    if (sel >= 0 && sel <= 59) sampai = sampai_tanggal.trim();
+  }
+  if (!sampai && lama_hari !== undefined && lama_hari !== null && lama_hari !== '') {
+    const n = Math.round(Number(lama_hari));
+    if (Number.isFinite(n) && n >= 1 && n <= 60) sampai = db.tanggalMajuISO(n - 1);
+  }
+  if (!sampai) {
+    return {
+      sukses: false,
+      pesan: 'Lama jeda tidak jelas atau di luar batas (1-60 hari).',
+      catatan_untuk_ai: 'Tanyakan dengan lembut berapa hari kira-kira jedanya (maksimal 60 hari). Jangan menanyakan alasan.',
+    };
+  }
+
+  db.setJedaSampai(konteks.jid, sampai);
+  return {
+    sukses: true,
+    jeda_aktif: true,
+    jeda_sampai: sampai,
+    catatan_untuk_ai: `Jeda tilawah dicatat sampai ${sampai} (inklusif). Selama itu Dawam tidak menawari/mengingatkan tilawah, dia tidak ditag dan tampil "sedang jeda" di rekap grup, lalu otomatis kembali setelah tanggal itu. Tanggapi dengan hangat dan penuh pengertian, TANPA menghakimi dan TANPA menanyakan alasan; doakan semoga lekas lapang. Sebut sampai kapan jedanya (tanggalnya) dan bahwa kalau mau mulai lagi lebih awal tinggal bilang.`,
+  };
+}
+
 async function eksekusiMintaBerhentiDawam({ feedback }, konteks) {
   if (feedback) {
     db.simpanFeedbackBerhenti(konteks.jid, feedback);
@@ -1138,6 +1213,7 @@ const EKSEKUTOR_PERSONAL = {
   broadcast_ke_grup_sosial: eksekusiBroadcastKeGrupSosial,
   tanya_bacaan_hari_lain: eksekusiTanyaBacaanHariLain,
   minta_berhenti_dawam: eksekusiMintaBerhentiDawam,
+  atur_jeda_tilawah: eksekusiAturJedaTilawah,
   aktifkan_kembali_dawam: eksekusiAktifkanKembaliDawam,
   atur_fitur_dawam: eksekusiAturFiturDawam,
   get_pengaturan_user: eksekusiGetPengaturanUser,
@@ -1196,10 +1272,10 @@ async function eksekusiTagAnggotaGrup({ kriteria, nama_target, pesan_pembuka }, 
       targetList = dataRekap.filter((d) => !d.sudah_aktivasi_personal);
       break;
     case 'belum_baca_hari_ini':
-      targetList = dataRekap.filter((d) => d.sudah_aktivasi_personal && !d.sudah_baca_hari_ini);
+      targetList = dataRekap.filter((d) => d.sudah_aktivasi_personal && !d.sudah_baca_hari_ini && !d.sedang_jeda);
       break;
     case 'di_bawah_pace':
-      targetList = dataRekap.filter((d) => d.sudah_aktivasi_personal && d.status_pace === 'DI_BAWAH_PACE');
+      targetList = dataRekap.filter((d) => d.sudah_aktivasi_personal && d.status_pace === 'DI_BAWAH_PACE' && !d.sedang_jeda);
       break;
     case 'nama_spesifik': {
       if (!nama_target) {
@@ -1293,6 +1369,7 @@ function bungkusLaporDariGrup(eksekutorPersonal) {
 const EKSEKUTOR_GRUP = {
   lapor_bacaan_manual: bungkusLaporDariGrup(eksekusiLaporBacaanManual),
   lapor_bacaan_by_ayat: bungkusLaporDariGrup(eksekusiLaporBacaanByAyat),
+  atur_jeda_tilawah: bungkusLaporDariGrup(eksekusiAturJedaTilawah),
   get_rekap_progress_grup: eksekusiGetRekapProgressGrup,
   get_info_mushaf: eksekusiGetInfoMushaf,
   minta_rekap_harian: eksekusiMintaRekapHarian,

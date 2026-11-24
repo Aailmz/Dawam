@@ -35,6 +35,11 @@ function tanggalMundurISO(jumlahHari) {
   return tanggalISO(new Date(Date.now() - jumlahHari * 24 * 60 * 60 * 1000));
 }
 
+// Tanggal N hari SETELAH hari ini (WIB), format 'YYYY-MM-DD'.
+function tanggalMajuISO(jumlahHari) {
+  return tanggalISO(new Date(Date.now() + jumlahHari * 24 * 60 * 60 * 1000));
+}
+
 // Selisih hari kalender antara dua string 'YYYY-MM-DD' (akhir - awal), tanpa efek timezone.
 function selisihHariISO(awalISO, akhirISO) {
   const [ya, ma, da] = awalISO.split('-').map(Number);
@@ -265,6 +270,10 @@ tambahKolomJikaBelumAda('users', 'bentuk_bacaan', "TEXT DEFAULT 'kartu'"); // 'k
 // "lanjut" mengirim kartu itu lagi (bukan loncat ke kartu berikutnya). Hanya berlaku selama sama dengan
 // last_sent_bacaan_id (lihat getKartuBelumTuntas), jadi perubahan posisi lain otomatis membatalkannya.
 tambahKolomJikaBelumAda('users', 'kartu_belum_tuntas', 'INTEGER');
+// Jeda tilawah sementara (break): tanggal terakhir jeda (inklusif, 'YYYY-MM-DD'), boleh null. Beda dari
+// "berhenti" (is_active): saat jeda user tidak ditawari/diingatkan tilawah dan tidak ditag/dihitung di rekap,
+// lalu OTOMATIS kembali begitu tanggalnya lewat (tanpa job apa pun, cukup dibandingkan dengan hari ini).
+tambahKolomJikaBelumAda('users', 'jeda_sampai', 'TEXT');
 
 // Migrasi (idempotent): user yang cuma lapor manual tidak pernah dapat tanggal_mulai_baca
 // (dulu cuma diisi saat kirim kartu), sehingga hitungSisaProgressUser menganggap mereka
@@ -616,6 +625,16 @@ function updateUserFields(jid, data) {
   db.prepare(`UPDATE users SET ${setClause} WHERE jid = ?`).run(...values, jid);
 }
 
+// ===== Jeda tilawah =====
+function setJedaSampai(jid, tanggalISOAtauNull) {
+  db.prepare('UPDATE users SET jeda_sampai = ? WHERE jid = ?').run(tanggalISOAtauNull ?? null, jid);
+}
+
+// True kalau user (objek dari getUser) sedang jeda pada tanggal tsb (default hari ini).
+function sedangJeda(user, hariISO = tanggalHariIniISO()) {
+  return !!(user && user.jeda_sampai && user.jeda_sampai >= hariISO);
+}
+
 // ===== Kartu belum tuntas (laporan ayat di tengah kartu) =====
 function setKartuBelumTuntas(jid, urutanAtauNull) {
   db.prepare('UPDATE users SET kartu_belum_tuntas = ? WHERE jid = ?').run(urutanAtauNull ?? null, jid);
@@ -965,7 +984,7 @@ function getAnggotaDiBawahPaceHariIni(groupJid) {
   const hasil = [];
   for (const jid of anggotaJids) {
     const user = getUser(jid);
-    if (user.is_registered !== 1 || user.is_active !== 1) continue;
+    if (user.is_registered !== 1 || user.is_active !== 1 || sedangJeda(user)) continue;
     const sisa = hitungSisaProgressUser(jid);
     if (sisa.ada_target && sisa.status === 'DI_BAWAH_PACE') {
       hasil.push({ jid, nama: user.name || 'Sahabat', selisih_tampilan: sisa.selisih_tampilan });
@@ -1096,6 +1115,8 @@ function getRekapProgressGroup(groupJid) {
       selisih_dari_target: sisaProgress.selisih_tampilan || null,
       persen_pace: sisaProgress.persen_pace ?? null,
       ada_target_harian: sisaProgress.ada_target === true,
+      sedang_jeda: sedangJeda(user),
+      jeda_sampai: sedangJeda(user) ? user.jeda_sampai : null,
       sudah_baca_hari_ini: sisaProgress.sudah_baca_hari_ini ?? false,
     };
   });
@@ -1367,6 +1388,9 @@ module.exports = {
   rataKartuPerJuz,
   setKartuBelumTuntas,
   getKartuBelumTuntas,
+  setJedaSampai,
+  sedangJeda,
+  tanggalMajuISO,
   laporanMenuntaskanKartu,
   persenProgresKeseluruhan,
   hitungPersenMingguan,

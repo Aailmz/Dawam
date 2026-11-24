@@ -37,6 +37,7 @@ const {
   updateLastSentBacaanId,
   getKartuBelumTuntas,
   setKartuBelumTuntas,
+  sedangJeda,
   getLogBacaanHarianByTanggal,
   setTanggalMulaiBaca,
   setStartBacaanId,
@@ -1046,6 +1047,7 @@ function setupSilentUserChecker() {
       // User yang sudah berhenti / belum terdaftar tidak lagi ditawari apa pun, jadi tidak
       // boleh dianggap "silent" (kalau tidak, pesan "3x tidak baca" terus terkirim ke mereka).
       if (u.is_registered !== 1 || u.is_active !== 1 || u.state === 'ONBOARDING') return false;
+      if (sedangJeda(u)) return false; // lagi jeda tilawah: bukan "tidak merespons"
       if (!u.waktu_tawaran_terakhir) return false;
       if (u.sudah_lapor_sesi_ini === 1) return false; // sudah ada aktivitas sejak ditawari, bukan silent
       const waktuTawaran = new Date(u.waktu_tawaran_terakhir).getTime();
@@ -1115,7 +1117,7 @@ async function kirimReminderSholat(waktuSholat, jid) {
 async function kirimTawaranNgaji(jid) {
   const user = getUser(jid);
   // Tawaran dijadwalkan 10 menit setelah reminder; kalau sejak itu user berhenti/masih onboarding, lewati.
-  if (user.is_active === 0 || user.state === 'ONBOARDING') return;
+  if (user.is_active === 0 || user.state === 'ONBOARDING' || sedangJeda(user)) return;
   const nama = getUserName(jid) || 'Sahabat Dawam';
 
   const belumPernahDitawarkanMode = user.gender === 'P' && !user.waktu_tawaran_terakhir;
@@ -1323,6 +1325,10 @@ function formatRekapMingguanTerstruktur(groupJid) {
     const logMingguIni = getLogBacaanHarianRange(jid, tanggalMulaiISO, tanggalSelesai);
     const totalKartu = logMingguIni.reduce((acc, l) => acc + l.jumlah_kartu, 0);
     const hariAktif = logMingguIni.length;
+    if (sedangJeda(user) && hariAktif === 0) {
+      baris.push({ nama: user.name || 'Sahabat', jeda_sampai: user.jeda_sampai });
+      continue;
+    }
 
     if (totalKartu > 0) adaDataSamaSekali = true;
 
@@ -1355,7 +1361,12 @@ function formatRekapMingguanTerstruktur(groupJid) {
 
   let teks = `📅 *Rekap Tilawah Minggu Ini* (${tanggalMulaiISO} s/d ${tanggalSelesai})\n\n`;
   for (const b of baris) {
-    const emoji = b.hari_aktif >= 6 ? '🔥' : b.hari_aktif >= 3 ? '📖' : b.hari_aktif > 0 ? '🌱' : '💤';
+    if (b.jeda_sampai) {
+      const [, bln, tgl] = String(b.jeda_sampai).split('-');
+      teks += `🌙 *${b.nama}* — sedang jeda (sampai ${Number(tgl)}/${Number(bln)})\n\n`;
+      continue;
+    }
+    const emoji = b.hari_aktif >= 6 ? '🔥' : b.hari_aktif >= 3 ? '📖' : b.hari_aktif > 0 ? '🌱' : '🤍';
     const persenTampilan = b.persen_pace_mingguan !== null ? `${b.persen_pace_mingguan}%` : '-';
     teks += `${emoji} *${b.nama}* — aktif ${b.hari_aktif}/7 hari\n`;
     teks += `   posisi akhir minggu: ${b.posisi_akhir_minggu} (rata-rata ${persenTampilan} capaian target harian minggu ini)`;
@@ -1403,7 +1414,7 @@ let rekapHarianSchedulerSudahDiset = false;
 // Anggota yang sudah aktivasi tapi belum baca hari ini -- kandidat untuk di-tag.
 function ambilJidBelumBacaHariIni(dataRekap) {
   return dataRekap
-    .filter((d) => d.sudah_aktivasi_personal && !d.sudah_baca_hari_ini)
+    .filter((d) => d.sudah_aktivasi_personal && !d.sudah_baca_hari_ini && !d.sedang_jeda)
     .map((d) => d.jid);
 }
 
@@ -1418,12 +1429,19 @@ function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
   let teks = '📊 *Rekap Tilawah Hari Ini*\n\n';
 
   for (const d of sudahAktif) {
+    // Lagi jeda (break) dan hari ini memang belum baca: tampil "sedang jeda", bukan 0% / ikon tidur.
+    if (d.sedang_jeda && !d.sudah_baca_hari_ini) {
+      const [, bln, tgl] = String(d.jeda_sampai).split('-');
+      teks += `🌙 *${d.nama}* — sedang jeda (sampai ${Number(tgl)}/${Number(bln)})\n\n`;
+      continue;
+    }
+
     // Belum ada target harian yang terhitung (target belum diset / belum pernah mulai baca):
     // persennya memang tidak bisa dihitung, JANGAN dipaksa tampil "0%" karena menyesatkan.
     if (!d.ada_target_harian) {
       teks += d.sudah_baca_hari_ini
         ? `✅ *${d.nama}* — sudah baca hari ini (target harian belum terhitung)\n\n`
-        : `💤 *${d.nama}* — belum mulai tilawah (target harian belum terhitung)\n\n`;
+        : `🤍 *${d.nama}* — belum mulai tilawah (target harian belum terhitung)\n\n`;
       continue;
     }
 
@@ -1436,7 +1454,7 @@ function formatRekapHarianTerstruktur(dataRekap, sertakanTagBelumBaca = false) {
       persenTampilan = '-';
     }
 
-    const emoji = d.persen_pace === 0 || persenTampilan === '0%' ? '💤' : d.status_pace === 'SUDAH_CAPAI_PACE' ? '🎉' : d.status_pace === 'DI_BAWAH_PACE' ? '📖' : '✅';
+    const emoji = d.persen_pace === 0 || persenTampilan === '0%' ? '🤍' : d.status_pace === 'SUDAH_CAPAI_PACE' ? '🎉' : d.status_pace === 'DI_BAWAH_PACE' ? '📖' : '✅';
 
     // Laporan ke user HANYA persen (tanpa jumlah kartu/halaman).
     teks += `${emoji} *${d.nama}* — ${persenTampilan} dari target harian\n\n`;
@@ -1608,7 +1626,7 @@ function setupAlkahfiJumatScheduler() {
     }
     await untukSetiapJid('Tawaran Al-Kahfi', targets, async (jid) => {
       const user = getUser(jid);
-      if (user.tawaran_alkahfi_aktif === 0) return;
+      if (user.tawaran_alkahfi_aktif === 0 || sedangJeda(user)) return;
       await kirimTawaranAlkahfi(jid);
     });
   });
